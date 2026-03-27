@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#080C08" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>CHECKPOINT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────── -->
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="brand-block">▓</span>
+      <span class="brand-name">CHECKPOINT</span>
+    </div>
+    <div class="header-meta">v0.1.0</div>
+  </header>
+
+  <!-- ── Status Bar ─────────────────────────────────── -->
+  <div class="status-bar" id="status">
+    <span class="status-prefix">&gt;</span>
+    <span class="status-msg" id="statusMsg">READY. ENTER LOCATIONS.</span>
+  </div>
+
+  <!-- ── Main Content ───────────────────────────────── -->
+  <main class="content">
+
+    <!-- [01] Start Location -->
+    <section class="block" id="block-start">
+      <div class="block-header">
+        <span class="block-num">[01]</span>
+        <span class="block-title">START LOCATION</span>
+      </div>
+      <div class="block-body">
+        <button class="gps-btn" id="gpsBtn" type="button">
+          <span class="gps-icon">◎</span>
+          <span id="gpsBtnLabel">ACQUIRE GPS SIGNAL</span>
+        </button>
+        <div class="or-divider">— OR —</div>
+        <div class="input-wrap">
+          <label class="input-label" for="startInput">ADDRESS OR INTERSECTION</label>
+          <div class="input-row">
+            <span class="input-cursor" aria-hidden="true">_</span>
+            <input type="text" class="terminal-input" id="startInput"
+                   placeholder="E.G. BROAD &amp; GIRARD, PHILADELPHIA" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- [02] Finish Location -->
+    <section class="block" id="block-finish">
+      <div class="block-header">
+        <span class="block-num">[02]</span>
+        <span class="block-title">FINISH LOCATION</span>
+      </div>
+      <div class="block-body">
+        <div class="input-wrap">
+          <label class="input-label" for="finishInput">ADDRESS OR INTERSECTION</label>
+          <div class="input-row">
+            <span class="input-cursor" aria-hidden="true">_</span>
+            <input type="text" class="terminal-input" id="finishInput"
+                   placeholder="E.G. FINISH BAR, PHILADELPHIA" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- [03] Controls -->
+    <section class="block" id="block-controls">
+      <div class="block-header">
+        <span class="block-num">[03]</span>
+        <span class="block-title">CONTROLS</span>
+      </div>
+      <div class="block-body">
+        <div id="controls-list"></div>
+        <button class="add-btn" id="addBtn" type="button">+ ADD CONTROL</button>
+      </div>
+    </section>
+
+    <!-- Optimize action -->
+    <div class="optimize-bar">
+      <button class="optimize-btn" id="optimizeBtn" type="button">
+        ▶ OPTIMIZE ROUTE
+      </button>
+    </div>
+
+    <!-- [04] Route Review (hidden until Optimize runs) -->
+    <section class="block hidden" id="block-route">
+      <div class="block-header">
+        <span class="block-num">[04]</span>
+        <span class="block-title">ROUTE</span>
+        <span class="block-meta" id="routeMeta"></span>
+      </div>
+      <div class="block-body block-body--no-pad">
+        <div id="route-map"></div>
+        <div class="block-body">
+          <div class="route-divider">— WAYPOINT ORDER —</div>
+          <ol class="route-list" id="route-list"></ol>
+          <button class="export-btn" id="exportBtn" type="button" disabled>
+            <span class="export-icon">⬛</span>
+            <span id="exportLabel">EXPORT GPX</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

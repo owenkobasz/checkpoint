@@ -1,0 +1,36 @@
+# dependencies
+node_modules
+
+# build output
+dist
+
+# local env files — never commit keys
+.env.local
+.env.*.local
+.env
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# logs
+*.log
+npm-debug.log*
+
+# editor
+.vscode/
+.idea/
+
+# internal planning & debug docs
+plan.md
+todo.md
+idea.md
+frontend.md
+report.md
+autocomplete-debug.md
+ui-improvements.md
