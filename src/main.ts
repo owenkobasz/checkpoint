@@ -495,12 +495,20 @@ function buildRoutedGPX(
   )
 }
 
-function downloadGPX(gpxString: string): void {
-  const blob = new Blob([gpxString], { type: 'application/gpx+xml' })
-  const url = URL.createObjectURL(blob)
+async function exportGPX(gpxString: string): Promise<void> {
+  const filename = `checkpoint-${Date.now()}.gpx`
+  const file = new File([gpxString], filename, { type: 'application/gpx+xml' })
+
+  if (navigator.canShare?.({ files: [file] })) {
+    await navigator.share({ files: [file], title: 'Alleycat Route' })
+    return
+  }
+
+  // Fallback: direct download
+  const url = URL.createObjectURL(file)
   const a = document.createElement('a')
   a.href = url
-  a.download = `checkpoint-${Date.now()}.gpx`
+  a.download = filename
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -622,7 +630,7 @@ async function runExport(): Promise<void> {
     const waypoints = resolvedRoute.map(p => p.coord)
     const trackPoints = await fetchRoute(waypoints)
     const gpx = buildRoutedGPX(trackPoints, resolvedRoute)
-    downloadGPX(gpx)
+    await exportGPX(gpx)
     setStatus('[OK] GPX EXPORTED', 'ok')
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'UNKNOWN ERROR'
