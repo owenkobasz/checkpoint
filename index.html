@@ -21,6 +21,9 @@
       <span class="brand-name">CHECKPOINT</span>
     </div>
     <div class="header-meta">v0.1.0</div>
+    <button class="provider-btn" id="providerBtn" type="button">
+      <span id="providerIndicator">◎ MAPBOX</span>
+    </button>
   </header>
 
   <!-- ── Status Bar ─────────────────────────────────── -->
@@ -115,5 +118,28 @@
   </main>
 
   <script type="module" src="/src/main.ts"></script>
+
+  <div class="modal-overlay hidden" id="unlockModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span class="modal-title">ENHANCED MODE</span>
+        <button class="modal-close" id="modalClose" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">ENTER ACCESS CODE TO ENABLE GOOGLE GEOCODING</p>
+        <div class="input-wrap">
+          <div class="input-row">
+            <span class="input-cursor" aria-hidden="true">_</span>
+            <input type="password" class="terminal-input" id="unlockInput"
+                   placeholder="ACCESS CODE" autocomplete="off" />
+          </div>
+        </div>
+        <p class="modal-error hidden" id="unlockError">ACCESS DENIED</p>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-submit" id="unlockSubmit" type="button">UNLOCK</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

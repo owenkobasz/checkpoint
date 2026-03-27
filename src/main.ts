@@ -2,8 +2,9 @@ import './style.css'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import Sortable from 'sortablejs'
-import { getGeocoder } from './geocoder'
+import { getGeocoder, getProviderName } from './geocoder'
 import type { Coord } from './geocoder'
+import { tryUnlock, isUnlocked, lock } from './unlock'
 
 // ── Types ───────────────────────────────────────────────────────
 type PointRole = 'start' | 'control' | 'finish'
@@ -29,8 +30,9 @@ let markersLayer:  L.LayerGroup  | null = null
 let polylineLayer: L.Polyline    | null = null
 let sortable:      Sortable      | null = null
 
-const geocoder = getGeocoder()
-const NEEDS_RATE_LIMIT = import.meta.env.VITE_GEOCODER_PROVIDER !== 'google'
+function needsRateLimit(): boolean {
+  return getProviderName() === 'nominatim'
+}
 
 // ── DOM refs ────────────────────────────────────────────────────
 const statusBar   = document.getElementById('status')        as HTMLDivElement
@@ -46,6 +48,14 @@ const exportBtn   = document.getElementById('exportBtn')     as HTMLButtonElemen
 const routeBlock  = document.getElementById('block-route')   as HTMLElement
 const routeMeta   = document.getElementById('routeMeta')     as HTMLSpanElement
 const routeList   = document.getElementById('route-list')    as HTMLOListElement
+
+const providerBtn       = document.getElementById('providerBtn')       as HTMLButtonElement
+const providerIndicator = document.getElementById('providerIndicator') as HTMLSpanElement
+const unlockModal       = document.getElementById('unlockModal')       as HTMLDivElement
+const unlockInput       = document.getElementById('unlockInput')       as HTMLInputElement
+const unlockSubmit      = document.getElementById('unlockSubmit')      as HTMLButtonElement
+const unlockError       = document.getElementById('unlockError')       as HTMLParagraphElement
+const modalClose        = document.getElementById('modalClose')        as HTMLButtonElement
 
 // ── Status bar ──────────────────────────────────────────────────
 function setStatus(msg: string, type: StatusType = 'ok'): void {
@@ -128,7 +138,7 @@ function attachAutocomplete(
       inputEl.value = shortLabel(coord.label)
       inputEl.disabled = true
       try {
-        coord = await geocoder.geocode(coord.label)
+        coord = await getGeocoder().geocode(coord.label)
       } finally {
         inputEl.disabled = false
       }
@@ -181,7 +191,7 @@ function attachAutocomplete(
       controller = new AbortController()
       const signal = controller.signal
 
-      geocoder.suggest(query, signal)
+      getGeocoder().suggest(query, signal)
         .then(results => { if (!signal.aborted) show(results) })
         .catch(() => {})
     }, 500)
@@ -528,8 +538,8 @@ async function runOptimize(): Promise<void> {
       resolvedStart = startCoords
     } else {
       setStatus('GEOCODING START...', 'busy')
-      if (NEEDS_RATE_LIMIT && needsDelay) await delay(1100)
-      resolvedStart = await geocoder.geocode(startVal)
+      if (needsRateLimit() && needsDelay) await delay(1100)
+      resolvedStart = await getGeocoder().geocode(startVal)
       needsDelay = true
     }
 
@@ -538,8 +548,8 @@ async function runOptimize(): Promise<void> {
       resolvedFinish = finishCoords
     } else {
       setStatus('GEOCODING FINISH...', 'busy')
-      if (NEEDS_RATE_LIMIT && needsDelay) await delay(1100)
-      resolvedFinish = await geocoder.geocode(finishVal)
+      if (needsRateLimit() && needsDelay) await delay(1100)
+      resolvedFinish = await getGeocoder().geocode(finishVal)
       needsDelay = true
     }
 
@@ -551,8 +561,8 @@ async function runOptimize(): Promise<void> {
         resolvedControls.push(cached)
       } else {
         setStatus(`GEOCODING CONTROL ${i + 1} OF ${controlEntries.length}...`, 'busy')
-        if (NEEDS_RATE_LIMIT && needsDelay) await delay(1100)
-        resolvedControls.push(await geocoder.geocode(value))
+        if (needsRateLimit() && needsDelay) await delay(1100)
+        resolvedControls.push(await getGeocoder().geocode(value))
         needsDelay = true
       }
     }
@@ -627,3 +637,63 @@ attachAutocomplete(startInput,  coord => { startCoords  = coord })
 attachAutocomplete(finishInput, coord => { finishCoords = coord })
 
 addControl()
+
+// ── Provider unlock UI ────────────────────────────────────────────
+function updateProviderUI(): void {
+  if (isUnlocked()) {
+    providerIndicator.textContent = '◉ GOOGLE'
+    providerBtn.classList.add('unlocked')
+  } else {
+    providerIndicator.textContent = '◎ MAPBOX'
+    providerBtn.classList.remove('unlocked')
+  }
+}
+
+providerBtn.addEventListener('click', () => {
+  if (isUnlocked()) {
+    lock()
+    updateProviderUI()
+    setStatus('[OK] SWITCHED TO MAPBOX', 'ok')
+  } else {
+    unlockInput.value = ''
+    unlockError.classList.add('hidden')
+    unlockModal.classList.remove('hidden')
+    setTimeout(() => unlockInput.focus(), 50)
+  }
+})
+
+modalClose.addEventListener('click', () => {
+  unlockModal.classList.add('hidden')
+})
+
+unlockModal.addEventListener('click', e => {
+  if (e.target === unlockModal) unlockModal.classList.add('hidden')
+})
+
+unlockSubmit.addEventListener('click', () => {
+  void (async () => {
+    unlockSubmit.disabled = true
+    unlockSubmit.textContent = 'CHECKING...'
+
+    const ok = await tryUnlock(unlockInput.value)
+
+    unlockSubmit.disabled = false
+    unlockSubmit.textContent = 'UNLOCK'
+
+    if (ok) {
+      unlockModal.classList.add('hidden')
+      updateProviderUI()
+      setStatus('[OK] GOOGLE GEOCODER ACTIVE', 'ok')
+    } else {
+      unlockError.classList.remove('hidden')
+      unlockInput.select()
+    }
+  })()
+})
+
+unlockInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') unlockSubmit.click()
+  if (e.key === 'Escape') unlockModal.classList.add('hidden')
+})
+
+updateProviderUI()

@@ -130,6 +130,28 @@ body::after {
   color: var(--text-muted);
 }
 
+/* ── Provider indicator button ─────────────────────────────────── */
+.provider-btn {
+  background: none;
+  font-family: inherit;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  padding: 4px 8px;
+  border: 1px solid var(--green-faint);
+}
+
+.provider-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--green-dim);
+}
+
+.provider-btn.unlocked {
+  color: var(--cyan-accent);
+  border-color: var(--cyan-accent);
+}
+
 /* ── Status Bar ────────────────────────────────────────────────── */
 .status-bar {
   display: flex;
@@ -603,4 +625,87 @@ body::after {
   cursor: not-allowed;
   border-color: var(--text-muted);
   color: var(--text-muted);
+}
+
+/* ── Modal ─────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 8, 0.85);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modal-box {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg-surface);
+  border: 1px solid var(--green-dim);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--green-faint);
+  background: var(--bg-base);
+}
+
+.modal-title {
+  font-size: var(--font-sm);
+  color: var(--cyan-accent);
+  letter-spacing: 0.1em;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  cursor: pointer;
+  font-size: var(--font-sm);
+}
+
+.modal-body {
+  padding: 16px 14px 8px;
+}
+
+.modal-desc {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  margin-bottom: 12px;
+}
+
+.modal-error {
+  font-size: var(--font-xs);
+  color: var(--red-error);
+  letter-spacing: 0.08em;
+  margin-top: 8px;
+}
+
+.modal-footer {
+  padding: 12px 14px;
+  border-top: 1px solid var(--green-faint);
+}
+
+.modal-submit {
+  width: 100%;
+  padding: 12px;
+  background: none;
+  border: 1px solid var(--cyan-accent);
+  color: var(--cyan-accent);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.modal-submit:active {
+  background: rgba(0, 255, 255, 0.08);
 }
