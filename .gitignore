@@ -27,11 +27,4 @@ npm-debug.log*
 .idea/
 
 # internal planning & debug docs
-plan.md
-todo.md
-idea.md
-frontend.md
-report.md
-autocomplete-debug.md
-ui-improvements.md
-plan-mapbox-unlock.md
+/docs

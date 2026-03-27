@@ -2,7 +2,7 @@
 
 A web tool for alleycat bike racers. Enter your manifest checkpoints, get an optimized route order, preview it on a map, then export a GPX file to load onto a Wahoo ELEMNT.
 
-**[Live demo →]()**
+**[checkpoint.bike](https://checkpoint.bike)**
 
 ---
 
@@ -23,7 +23,8 @@ The Wahoo handles on-device routing between waypoints. Checkpoint just gets the 
 
 - **Vite + TypeScript** — build tooling
 - **Leaflet + OpenStreetMap** — map preview, no API key required
-- **Google Maps JS API** — address autocomplete (Places) and geocoding; falls back to Nominatim if no key is configured
+- **Mapbox Geocoding API** — default address autocomplete and geocoding
+- **Google Maps JS API** — enhanced geocoding, unlocked via access code
 - **SortableJS** — drag-and-drop reordering
 
 ---
@@ -36,17 +37,19 @@ cd checkpoint
 npm install
 ```
 
-Copy the env template and add your Google Maps key:
+Copy the env template:
 
 ```bash
 cp .env .env.local
 ```
 
-Edit `.env.local`:
+Edit `.env.local` with your keys:
 
 ```
-VITE_GEOCODER_PROVIDER=google
-VITE_GOOGLE_MAPS_KEY=your_key_here
+VITE_GEOCODER_PROVIDER=mapbox
+VITE_MAPBOX_TOKEN=pk.eyJ1...
+VITE_GOOGLE_MAPS_KEY=AIzaSy...
+VITE_UNLOCK_HASH=sha256_hex_of_your_access_code
 ```
 
 Then start the dev server:
@@ -55,17 +58,34 @@ Then start the dev server:
 npm run dev
 ```
 
-To use without a Google key, leave `VITE_GEOCODER_PROVIDER=nominatim`. Nominatim is free but rate-limited to 1 request/second and has no autocomplete for the Places-style suggestions.
+### Generating the unlock hash
+
+The Google geocoder is gated behind an access code. The hash of that code is stored in `VITE_UNLOCK_HASH` — never the code itself. To generate it, run this in any browser console on an HTTPS page:
+
+```javascript
+crypto.subtle
+  .digest('SHA-256', new TextEncoder().encode('your-access-code'))
+  .then(buf => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join(''))
+  .then(console.log)
+```
+
+Paste the printed hex string into `VITE_UNLOCK_HASH`.
+
+### Mapbox setup
+
+Sign up at [mapbox.com](https://mapbox.com) → Account → Tokens → create a public token. Add URL restrictions:
+- `http://localhost:5173` for local dev
+- Your production domain for live
 
 ### Google Maps setup
 
-Go to [console.cloud.google.com](https://console.cloud.google.com) and enable these three APIs on your project:
+Go to [console.cloud.google.com](https://console.cloud.google.com) and enable these three APIs:
 
 - Maps JavaScript API
-- Geocoding API
 - Places API
+- Geocoding API
 
-Restrict your key to HTTP referrers. For local dev add `http://localhost:*/*`.
+Create an API key. Under **Application restrictions** set it to **None** (the Geocoding REST API does not support HTTP referrer restrictions — restrict by API instead). Under **API restrictions** limit it to the three APIs above.
 
 ---
 
@@ -75,23 +95,26 @@ Restrict your key to HTTP referrers. For local dev add `http://localhost:*/*`.
 npm run build
 ```
 
-Output goes to `dist/`. It's a fully static site — no server required.
+Output goes to `dist/`. Fully static — no server required.
 
 ---
 
 ## Deployment
 
-### Vercel / Netlify
+### Vercel
 
 1. Push to GitHub
-2. Import the repo in Vercel or Netlify
-3. Set environment variables in the dashboard:
-   - `VITE_GEOCODER_PROVIDER` = `google`
-   - `VITE_GOOGLE_MAPS_KEY` = your key
-4. Add your production domain to the Google key's HTTP referrer allowlist
+2. Import the repo at vercel.com → New Project
+3. Vercel auto-detects Vite — build command `npm run build`, output dir `dist`
+4. Add all four environment variables in Settings → Environment Variables:
+   - `VITE_GEOCODER_PROVIDER` = `mapbox`
+   - `VITE_MAPBOX_TOKEN` = your full Mapbox token
+   - `VITE_GOOGLE_MAPS_KEY` = your Google key
+   - `VITE_UNLOCK_HASH` = your hash
+5. Settings → Domains → add your custom domain
+6. After adding or changing env vars, trigger a redeploy — Vercel doesn't rebuild automatically
 
-Build command: `npm run build`
-Output directory: `dist`
+> **Note:** Mapbox tokens are long (`pk.eyJ1...`). Make sure the full token is pasted — Vercel's input can silently truncate on paste.
 
 ---
 

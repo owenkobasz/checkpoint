@@ -33,7 +33,7 @@ export class GoogleGeocoder implements GeocoderProvider {
     }
 
     if (data.status !== 'OK' || data.results.length === 0) {
-      throw new Error(`NOT FOUND: "${query}"`)
+      throw new Error(`${data.status}: "${query}"`)
     }
 
     const r = data.results[0]

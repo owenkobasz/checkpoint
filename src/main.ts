@@ -5,6 +5,7 @@ import Sortable from 'sortablejs'
 import { getGeocoder, getProviderName } from './geocoder'
 import type { Coord } from './geocoder'
 import { tryUnlock, isUnlocked, lock } from './unlock'
+import { fetchRoute } from './router'
 
 // ── Types ───────────────────────────────────────────────────────
 type PointRole = 'start' | 'control' | 'finish'
@@ -456,15 +457,22 @@ function escapeXml(str: string): string {
     .replace(/"/g, '&quot;')
 }
 
-function buildGPX(start: Coord, orderedControls: Coord[], finish: Coord): string {
-  const all = [start, ...orderedControls, finish]
+function buildRoutedGPX(
+  trackPoints: [number, number][],
+  waypoints: RoutePoint[]
+): string {
+  const trkpts = trackPoints
+    .map(([lat, lon]) =>
+      `      <trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}"></trkpt>`
+    )
+    .join('\n')
 
-  const rtepts = all
+  const wpts = waypoints
     .map(
-      pt =>
-        `    <rtept lat="${pt.lat.toFixed(6)}" lon="${pt.lon.toFixed(6)}">\n` +
-        `      <name>${escapeXml(pt.label)}</name>\n` +
-        `    </rtept>`
+      p =>
+        `  <wpt lat="${p.coord.lat.toFixed(6)}" lon="${p.coord.lon.toFixed(6)}">\n` +
+        `    <name>${escapeXml(p.label)}</name>\n` +
+        `  </wpt>`
     )
     .join('\n')
 
@@ -476,10 +484,13 @@ function buildGPX(start: Coord, orderedControls: Coord[], finish: Coord): string
     `    <name>Alleycat Route</name>\n` +
     `    <time>${new Date().toISOString()}</time>\n` +
     `  </metadata>\n` +
-    `  <rte>\n` +
+    wpts + '\n' +
+    `  <trk>\n` +
     `    <name>Alleycat Route</name>\n` +
-    rtepts + '\n' +
-    `  </rte>\n` +
+    `    <trkseg>\n` +
+    trkpts + '\n' +
+    `    </trkseg>\n` +
+    `  </trk>\n` +
     `</gpx>`
   )
 }
@@ -600,23 +611,33 @@ async function runOptimize(): Promise<void> {
   }
 }
 
-function runExport(): void {
+async function runExport(): Promise<void> {
   if (!resolvedRoute) return
 
-  const start    = resolvedRoute.find(p => p.role === 'start')!
-  const finish   = resolvedRoute.find(p => p.role === 'finish')!
-  const controls = resolvedRoute.filter(p => p.role === 'control')
+  exportBtn.disabled = true
+  exportBtn.textContent = 'ROUTING...'
+  setStatus('FETCHING ROUTE...', 'busy')
 
-  const gpx = buildGPX(start.coord, controls.map(p => p.coord), finish.coord)
-  downloadGPX(gpx)
-  setStatus('[OK] GPX EXPORTED', 'ok')
+  try {
+    const waypoints = resolvedRoute.map(p => p.coord)
+    const trackPoints = await fetchRoute(waypoints)
+    const gpx = buildRoutedGPX(trackPoints, resolvedRoute)
+    downloadGPX(gpx)
+    setStatus('[OK] GPX EXPORTED', 'ok')
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'UNKNOWN ERROR'
+    setStatus(`[ERR] ${msg}`, 'error')
+  } finally {
+    exportBtn.disabled = false
+    exportBtn.textContent = '↓ EXPORT GPX'
+  }
 }
 
 // ── Event listeners ───────────────────────────────────────────────
 gpsBtn.addEventListener('click', () => { void getGPS() })
 addBtn.addEventListener('click', addControl)
 optimizeBtn.addEventListener('click', () => { void runOptimize() })
-exportBtn.addEventListener('click', runExport)
+exportBtn.addEventListener('click', () => { void runExport() })
 
 startInput.addEventListener('input', () => {
   if (startInput.value.trim().length > 0 && startCoords) {
