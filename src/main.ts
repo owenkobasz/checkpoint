@@ -497,7 +497,7 @@ function buildRoutedGPX(
 
 async function exportGPX(gpxString: string): Promise<void> {
   const filename = `checkpoint-${Date.now()}.gpx`
-  const file = new File([gpxString], filename, { type: 'application/gpx+xml' })
+  const file = new File([gpxString], filename, { type: 'application/octet-stream' })
 
   if (navigator.canShare?.({ files: [file] })) {
     await navigator.share({ files: [file], title: 'Alleycat Route' })
