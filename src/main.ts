@@ -6,17 +6,12 @@ import { getGeocoder, getProviderName } from './geocoder'
 import type { Coord } from './geocoder'
 import { tryUnlock, isUnlocked, lock } from './unlock'
 import { fetchRoute } from './router'
+import { saveState, loadState, clearState } from './persistence'
+import type { PersistedState, PersistedControl, RoutePoint, PointRole } from './persistence'
+import { buildShareURL, loadShareURL } from './share'
 
 // ── Types ───────────────────────────────────────────────────────
-type PointRole = 'start' | 'control' | 'finish'
 type StatusType = 'ok' | 'warn' | 'error' | 'busy'
-
-interface RoutePoint {
-  coord:     Coord
-  role:      PointRole
-  label:     string
-  controlId: number | null
-}
 
 // ── State ───────────────────────────────────────────────────────
 let startCoords:   Coord | null = null
@@ -30,6 +25,36 @@ let mapInstance:   L.Map         | null = null
 let markersLayer:  L.LayerGroup  | null = null
 let polylineLayer: L.Polyline    | null = null
 let sortable:      Sortable      | null = null
+
+// ── Persistence ─────────────────────────────────────────────────
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+function persistCurrentState(): void {
+  const controls: PersistedControl[] = []
+  controlsList.querySelectorAll<HTMLElement>('.control-row').forEach(row => {
+    const id    = parseInt(row.dataset['id'] ?? '0', 10)
+    const input = row.querySelector<HTMLInputElement>('input')
+    controls.push({ id, inputLabel: input?.value ?? '', coord: controlCoords.get(id) ?? null })
+  })
+
+  const state: PersistedState = {
+    version:       1,
+    savedAt:       Date.now(),
+    startLabel:    startInput.value,
+    startCoords,
+    finishLabel:   finishInput.value,
+    finishCoords,
+    controls,
+    controlCount,
+    resolvedRoute,
+  }
+  saveState(state)
+}
+
+function scheduleSave(): void {
+  if (saveTimer !== null) clearTimeout(saveTimer)
+  saveTimer = setTimeout(persistCurrentState, 600)
+}
 
 function needsRateLimit(): boolean {
   return getProviderName() === 'nominatim'
@@ -46,6 +71,8 @@ const controlsList= document.getElementById('controls-list') as HTMLDivElement
 const addBtn      = document.getElementById('addBtn')        as HTMLButtonElement
 const optimizeBtn = document.getElementById('optimizeBtn')   as HTMLButtonElement
 const exportBtn   = document.getElementById('exportBtn')     as HTMLButtonElement
+const clearBtn    = document.getElementById('clearBtn')      as HTMLButtonElement
+const shareBtn    = document.getElementById('shareBtn')      as HTMLButtonElement
 const routeBlock  = document.getElementById('block-route')   as HTMLElement
 const routeMeta   = document.getElementById('routeMeta')     as HTMLSpanElement
 const routeList   = document.getElementById('route-list')    as HTMLOListElement
@@ -89,6 +116,7 @@ async function getGPS(): Promise<void> {
     gpsBtn.classList.add('locked')
     gpsBtnLabel.textContent = `GPS LOCKED — ${lat.toFixed(4)}, ${lon.toFixed(4)}`
     setStatus('[OK] GPS LOCKED', 'ok')
+    scheduleSave()
   } catch {
     setStatus('[ERR] GPS UNAVAILABLE — ENTER ADDRESS MANUALLY', 'error')
     gpsBtnLabel.textContent = 'ACQUIRE GPS SIGNAL'
@@ -222,9 +250,8 @@ function attachAutocomplete(
 }
 
 // ── Controls list ────────────────────────────────────────────────
-function addControl(): void {
-  controlCount++
-  const id = controlCount
+function addControl(existingId?: number): void {
+  const id = existingId ?? ++controlCount
 
   const row = document.createElement('div')
   row.className = 'control-row'
@@ -232,7 +259,7 @@ function addControl(): void {
 
   const indexSpan = document.createElement('span')
   indexSpan.className = 'control-index'
-  indexSpan.textContent = String(controlCount).padStart(2, '0')
+  indexSpan.textContent = String(id).padStart(2, '0')
 
   const wrap = document.createElement('div')
   wrap.className = 'input-wrap'
@@ -268,8 +295,8 @@ function addControl(): void {
   row.appendChild(removeBtn)
   controlsList.appendChild(row)
 
-  input.addEventListener('input', () => controlCoords.delete(id))
-  attachAutocomplete(input, coord => controlCoords.set(id, coord))
+  input.addEventListener('input', () => { controlCoords.delete(id); scheduleSave() })
+  attachAutocomplete(input, coord => { controlCoords.set(id, coord); scheduleSave() })
 
   input.focus()
   renumberControls()
@@ -280,6 +307,7 @@ function removeControl(id: number): void {
   if (row) row.remove()
   controlCoords.delete(id)
   renumberControls()
+  scheduleSave()
 }
 
 function renumberControls(): void {
@@ -433,6 +461,7 @@ function onListReorder(): void {
 
   updateListIndices()
   renderMap(resolvedRoute)
+  scheduleSave()
 }
 
 function updateListIndices(): void {
@@ -609,6 +638,7 @@ async function runOptimize(): Promise<void> {
     exportBtn.disabled = false
     setStatus('[OK] ROUTE READY — REORDER IF NEEDED', 'ok')
     routeBlock.scrollIntoView({ behavior: 'smooth' })
+    scheduleSave()
 
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'UNKNOWN ERROR'
@@ -643,9 +673,14 @@ async function runExport(): Promise<void> {
 
 // ── Event listeners ───────────────────────────────────────────────
 gpsBtn.addEventListener('click', () => { void getGPS() })
-addBtn.addEventListener('click', addControl)
+addBtn.addEventListener('click', () => addControl())
 optimizeBtn.addEventListener('click', () => { void runOptimize() })
 exportBtn.addEventListener('click', () => { void runExport() })
+clearBtn.addEventListener('click', () => {
+  if (!confirm('Start a new session? All checkpoints will be cleared.')) return
+  clearState()
+  location.reload()
+})
 
 startInput.addEventListener('input', () => {
   if (startInput.value.trim().length > 0 && startCoords) {
@@ -653,19 +688,107 @@ startInput.addEventListener('input', () => {
     gpsBtn.classList.remove('locked')
     gpsBtnLabel.textContent = 'ACQUIRE GPS SIGNAL'
     startInput.placeholder = 'E.G. BROAD & GIRARD, PHILADELPHIA'
+    scheduleSave()
   }
 })
 
 finishInput.addEventListener('input', () => {
   if (finishInput.value.trim().length > 0 && finishCoords) {
     finishCoords = null
+    scheduleSave()
   }
 })
 
-attachAutocomplete(startInput,  coord => { startCoords  = coord })
-attachAutocomplete(finishInput, coord => { finishCoords = coord })
+attachAutocomplete(startInput,  coord => { startCoords  = coord; scheduleSave() })
+attachAutocomplete(finishInput, coord => { finishCoords = coord; scheduleSave() })
 
-addControl()
+// ── Restore or init ───────────────────────────────────────────────
+function applyState(saved: Pick<PersistedState, 'startCoords' | 'startLabel' | 'finishCoords' | 'finishLabel' | 'controls' | 'controlCount' | 'resolvedRoute'>): void {
+  startCoords  = saved.startCoords
+  finishCoords = saved.finishCoords
+  controlCount = saved.controlCount
+
+  if (saved.startLabel)  startInput.value  = saved.startLabel
+  if (saved.finishLabel) finishInput.value = saved.finishLabel
+
+  if (saved.startCoords?.label === 'Current Location') {
+    gpsBtn.classList.add('locked')
+    gpsBtnLabel.textContent = `GPS LOCKED — ${saved.startCoords.lat.toFixed(4)}, ${saved.startCoords.lon.toFixed(4)}`
+  }
+
+  saved.controls.forEach(ctrl => {
+    addControl(ctrl.id)
+    const input = document.getElementById(`control-${ctrl.id}`) as HTMLInputElement | null
+    if (input && ctrl.inputLabel) input.value = ctrl.inputLabel
+    if (ctrl.coord) controlCoords.set(ctrl.id, ctrl.coord)
+  })
+
+  if (saved.resolvedRoute) {
+    resolvedRoute = saved.resolvedRoute
+    routeBlock.classList.remove('hidden')
+    if (!mapInstance) initMap()
+    buildRouteList(resolvedRoute)
+    renderMap(resolvedRoute)
+    const controlCount_ = resolvedRoute.filter(p => p.role === 'control').length
+    routeMeta.textContent = `${controlCount_} CONTROL${controlCount_ !== 1 ? 'S' : ''}`
+    exportBtn.disabled = false
+  }
+}
+
+function restoreFromSaved(): boolean {
+  const fromURL = loadShareURL()
+  if (fromURL) {
+    const full: PersistedState = {
+      version:       1,
+      savedAt:       Date.now(),
+      startLabel:    fromURL.startLabel    ?? '',
+      startCoords:   fromURL.startCoords   ?? null,
+      finishLabel:   fromURL.finishLabel   ?? '',
+      finishCoords:  fromURL.finishCoords  ?? null,
+      controls:      fromURL.controls      ?? [],
+      controlCount:  fromURL.controlCount  ?? 0,
+      resolvedRoute: null,
+    }
+    saveState(full)
+    history.replaceState(null, '', location.pathname)
+    applyState(full)
+    return true
+  }
+
+  const saved = loadState()
+  if (!saved) return false
+  applyState(saved)
+  return true
+}
+
+if (!restoreFromSaved()) addControl()
+
+shareBtn.addEventListener('click', () => {
+  persistCurrentState()
+  const controls_: PersistedControl[] = []
+  controlsList.querySelectorAll<HTMLElement>('.control-row').forEach(row => {
+    const id    = parseInt(row.dataset['id'] ?? '0', 10)
+    const input = row.querySelector<HTMLInputElement>('input')
+    controls_.push({ id, inputLabel: input?.value ?? '', coord: controlCoords.get(id) ?? null })
+  })
+  const snap: PersistedState = {
+    version:       1,
+    savedAt:       Date.now(),
+    startLabel:    startInput.value,
+    startCoords,
+    finishLabel:   finishInput.value,
+    finishCoords,
+    controls:      controls_,
+    controlCount,
+    resolvedRoute,
+  }
+  const url = buildShareURL(snap)
+  navigator.clipboard.writeText(url).then(() => {
+    setStatus('[OK] SHARE LINK COPIED TO CLIPBOARD', 'ok')
+  }).catch(() => {
+    setStatus('[ERR] CLIPBOARD UNAVAILABLE — COPY URL MANUALLY', 'error')
+  })
+})
 
 // ── Provider unlock UI ────────────────────────────────────────────
 function updateProviderUI(): void {
