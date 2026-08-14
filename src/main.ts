@@ -5,6 +5,7 @@ import Sortable from 'sortablejs'
 import { getGeocoder, getProviderName, switchProvider } from './geocoder'
 import type { Coord, ProviderName } from './geocoder'
 import { buildAirMatrix, optimizeOrder, haversineKm } from './optimize'
+import { fetchCyclingMatrix, clearMatrixCache } from './matrix'
 import { fetchRoute } from './router'
 import { saveState, loadState, clearState } from './persistence'
 import type { PersistedState, PersistedControl, RoutePoint, PointRole } from './persistence'
@@ -313,12 +314,40 @@ function renumberControls(): void {
 }
 
 // ── Route meta ───────────────────────────────────────────────────
-function setRouteMeta(route: RoutePoint[]): void {
+let displayCtx: { nodes: Coord[]; km: Float64Array; street: boolean } | null = null
+
+function coordKey(c: Coord): string {
+  return `${c.lat.toFixed(6)},${c.lon.toFixed(6)}`
+}
+
+function routeKm(route: RoutePoint[]): { km: number; street: boolean } {
+  if (displayCtx) {
+    const m = displayCtx.nodes.length
+    const index = new Map(displayCtx.nodes.map((c, i) => [coordKey(c), i]))
+    const ids: number[] = []
+    for (const p of route) {
+      const id = index.get(coordKey(p.coord))
+      if (id === undefined) break
+      ids.push(id)
+    }
+    if (ids.length === route.length) {
+      let km = 0
+      for (let k = 0; k < ids.length - 1; k++)
+        km += displayCtx.km[ids[k] * m + ids[k + 1]]
+      return { km, street: displayCtx.street }
+    }
+  }
   let km = 0
   for (let i = 0; i < route.length - 1; i++)
     km += haversineKm(route[i].coord, route[i + 1].coord)
+  return { km, street: false }
+}
+
+function setRouteMeta(route: RoutePoint[]): void {
+  const { km, street } = routeKm(route)
   const n = route.length - 2
-  routeMeta.textContent = `${n} CONTROL${n !== 1 ? 'S' : ''} — ${km.toFixed(1)} KM`
+  routeMeta.textContent =
+    `${n} CONTROL${n !== 1 ? 'S' : ''} — ${km.toFixed(1)} KM${street ? '' : ' (AIR)'}`
 }
 
 // ── Map ───────────────────────────────────────────────────────────
@@ -588,7 +617,10 @@ async function runOptimize(): Promise<void> {
 
     setStatus('OPTIMIZING ROUTE...', 'busy')
     const nodes = [resolvedStart, ...resolvedControls, resolvedFinish]
-    const order = optimizeOrder(buildAirMatrix(nodes), resolvedControls.length)
+    const street = await fetchCyclingMatrix(nodes)
+    const objective = street ? street.seconds : buildAirMatrix(nodes)
+    const order = optimizeOrder(objective, resolvedControls.length)
+    displayCtx = street ? { nodes, km: street.km, street: true } : null
 
     resolvedRoute = [
       { coord: resolvedStart,  role: 'start',   label: shortLabel(resolvedStart.label),  controlId: null },
@@ -608,7 +640,12 @@ async function runOptimize(): Promise<void> {
 
     setRouteMeta(resolvedRoute)
     exportBtn.disabled = false
-    setStatus('[OK] ROUTE READY — REORDER IF NEEDED', 'ok')
+    setStatus(
+      street
+        ? '[OK] ROUTE READY (STREET-ROUTED) — REORDER IF NEEDED'
+        : '[OK] ROUTE READY (AIR DISTANCES) — REORDER IF NEEDED',
+      'ok'
+    )
     routeBlock.scrollIntoView({ behavior: 'smooth' })
     scheduleSave()
 
@@ -651,6 +688,8 @@ exportBtn.addEventListener('click', () => { void runExport() })
 clearBtn.addEventListener('click', () => {
   if (!confirm('Start a new session? All checkpoints will be cleared.')) return
   clearState()
+  clearMatrixCache()
+  displayCtx = null
   location.reload()
 })
 

@@ -857,36 +857,38 @@ seeded PRNG for all random instances so failures are reproducible):
 
 ### Phase 2 — Street distances via Mapbox Matrix (§2.3–2.4)
 
-- [ ] **New module `src/matrix.ts`** — `fetchCyclingMatrix(nodes)` per §2.3: existing
+- [x] **New module `src/matrix.ts`** — `fetchCyclingMatrix(nodes)` per §2.3: existing
   `VITE_MAPBOX_TOKEN`, ≤ 25 coordinates, `annotations=duration,distance`, 4 s
   timeout, coord-keyed cache, **any null cell → return `null`** (whole-matrix
   fallback, no partial data)
-- [ ] **Kill switch** — check `VITE_STREET_MATRIX === 'off'` at the top of
+- [x] **Kill switch** — check `VITE_STREET_MATRIX === 'off'` at the top of
   `fetchCyclingMatrix`; add the variable to `src/env.d.ts`
-- [ ] **Export `clearMatrixCache()`** — called from the CLEAR SESSION handler
-- [ ] **`runOptimize` becomes matrix-aware** — await `fetchCyclingMatrix`; objective =
+- [x] **Export `clearMatrixCache()`** — called from the CLEAR SESSION handler
+- [x] **`runOptimize` becomes matrix-aware** — await `fetchCyclingMatrix`; objective =
   street seconds when present, else air matrix; set
   `displayCtx = street ? { nodes, km: street.km, street: true } : null` *before* the
   `setRouteMeta` call so the displayed km comes from the same matrix that was solved
-- [ ] **Status suffixes** — `[OK] ROUTE READY (STREET-ROUTED)` vs
+- [x] **Status suffixes** — `[OK] ROUTE READY (STREET-ROUTED)` vs
   `... (AIR DISTANCES)`
-- [ ] **Extend `setRouteMeta` for display consistency** — consume `displayCtx`
+- [x] **Extend `setRouteMeta` for display consistency** — consume `displayCtx`
   (coord-key lookup into `nodes`, matrix leg sum) with haversine fallback when
   context is missing; append `(AIR)` whenever air distances are shown
-- [ ] **Reset `displayCtx`** on CLEAR SESSION and whenever a fresh optimize runs
-- [ ] **Test 6: `fetchCyclingMatrix` fallback** — stub `fetch` via `vi.stubGlobal`
+- [x] **Reset `displayCtx`** on CLEAR SESSION and whenever a fresh optimize runs
+- [x] **Test 6: `fetchCyclingMatrix` fallback** — stub `fetch` via `vi.stubGlobal`
   and the token via `vi.stubEnv`: non-OK response, `code !== 'Ok'`, any null cell,
   timeout, >25 nodes → every case returns `null`, never throws; kill switch returns
-  `null`
-- [ ] **Token sanity check** — confirm the Mapbox public token's scopes cover the
-  Matrix API and its URL restrictions cover the app's origins
-- [ ] **`npm run typecheck` + `npm run test` + `npm run build`** — all clean
-- [ ] **Manual QA** — online: `(STREET-ROUTED)`, plausible street km, drag keeps the
-  same metric; airplane mode: `(AIR DISTANCES)` + `KM (AIR)` within ~4 s, no error;
-  15+ controls: heuristic path on street matrix behaves
-- [ ] **Post-deploy** — one live optimize on production; check the Mapbox dashboard's
-  Matrix element count after a race weekend (~196 elements per 12-control optimize,
-  §2.4)
+  `null`; plus success parsing and cache-hit coverage
+- [x] **Token sanity check** — verified live: the project token returns
+  `code: Ok` with asymmetric cycling distances from the Matrix API (2026-08-14)
+- [x] **`npm run typecheck` + `npm run test` + `npm run build`** — all clean
+  (19 tests passing)
+- [ ] **Manual QA** — *deferred: needs a browser/phone session* — online:
+  `(STREET-ROUTED)`, plausible street km, drag keeps the same metric; airplane
+  mode: `(AIR DISTANCES)` + `KM (AIR)` within ~4 s, no error; 15+ controls:
+  heuristic path on street matrix behaves
+- [ ] **Post-deploy** — *deferred until this branch deploys* — one live optimize on
+  production; check the Mapbox dashboard's Matrix element count after a race
+  weekend (~196 elements per 12-control optimize, §2.4)
 
 ### Phase 3 — Polish (optional, §6)
 
