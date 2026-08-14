@@ -2,11 +2,10 @@ import { setOptions, importLibrary } from '@googlemaps/js-api-loader'
 import type { Coord, GeocoderProvider } from './types'
 
 export class GoogleGeocoder implements GeocoderProvider {
-  private readonly apiKey: string
   private placesLib: google.maps.PlacesLibrary | null = null
+  private geocoder: google.maps.Geocoder | null = null
 
   constructor(apiKey: string) {
-    this.apiKey = apiKey
     setOptions({ key: apiKey, v: 'weekly' })
   }
 
@@ -16,30 +15,31 @@ export class GoogleGeocoder implements GeocoderProvider {
     return this.placesLib
   }
 
+  private async ensureGeocoder(): Promise<google.maps.Geocoder> {
+    if (this.geocoder) return this.geocoder
+    const lib = await importLibrary('geocoding') as google.maps.GeocodingLibrary
+    this.geocoder = new lib.Geocoder()
+    return this.geocoder
+  }
+
+  // Uses the Maps JS API Geocoder (not the REST endpoint) so the API key can be
+  // HTTP-referer-restricted and safely shipped to the browser.
   async geocode(query: string): Promise<Coord> {
-    const url =
-      `https://maps.googleapis.com/maps/api/geocode/json` +
-      `?address=${encodeURIComponent(query)}&key=${this.apiKey}`
+    const geocoder = await this.ensureGeocoder()
 
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`GEOCODER ERROR (${res.status})`)
-
-    const data = await res.json() as {
-      status: string
-      results: Array<{
-        formatted_address: string
-        geometry: { location: { lat: number; lng: number } }
-      }>
+    let results: google.maps.GeocoderResult[]
+    try {
+      results = (await geocoder.geocode({ address: query })).results
+    } catch {
+      // The JS Geocoder rejects on ZERO_RESULTS and quota/denial states alike
+      throw new Error(`NOT FOUND: "${query}"`)
     }
+    if (results.length === 0) throw new Error(`NOT FOUND: "${query}"`)
 
-    if (data.status !== 'OK' || data.results.length === 0) {
-      throw new Error(`${data.status}: "${query}"`)
-    }
-
-    const r = data.results[0]
+    const r = results[0]
     return {
-      lat: r.geometry.location.lat,
-      lon: r.geometry.location.lng,
+      lat: r.geometry.location.lat(),
+      lon: r.geometry.location.lng(),
       label: r.formatted_address,
     }
   }

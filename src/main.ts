@@ -2,9 +2,9 @@ import './style.css'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import Sortable from 'sortablejs'
-import { getGeocoder, getProviderName } from './geocoder'
-import type { Coord } from './geocoder'
-import { tryUnlock, isUnlocked, lock } from './unlock'
+import { getGeocoder, getProviderName, switchProvider } from './geocoder'
+import type { Coord, ProviderName } from './geocoder'
+import { buildAirMatrix, optimizeOrder, haversineKm } from './optimize'
 import { fetchRoute } from './router'
 import { saveState, loadState, clearState } from './persistence'
 import type { PersistedState, PersistedControl, RoutePoint, PointRole } from './persistence'
@@ -79,11 +79,6 @@ const routeList   = document.getElementById('route-list')    as HTMLOListElement
 
 const providerBtn       = document.getElementById('providerBtn')       as HTMLButtonElement
 const providerIndicator = document.getElementById('providerIndicator') as HTMLSpanElement
-const unlockModal       = document.getElementById('unlockModal')       as HTMLDivElement
-const unlockInput       = document.getElementById('unlockInput')       as HTMLInputElement
-const unlockSubmit      = document.getElementById('unlockSubmit')      as HTMLButtonElement
-const unlockError       = document.getElementById('unlockError')       as HTMLParagraphElement
-const modalClose        = document.getElementById('modalClose')        as HTMLButtonElement
 
 // ── Status bar ──────────────────────────────────────────────────
 function setStatus(msg: string, type: StatusType = 'ok'): void {
@@ -317,42 +312,13 @@ function renumberControls(): void {
   })
 }
 
-// ── Optimization ─────────────────────────────────────────────────
-function haversine(a: Coord, b: Coord): number {
-  const R = 6371
-  const dLat = (b.lat - a.lat) * (Math.PI / 180)
-  const dLon = (b.lon - a.lon) * (Math.PI / 180)
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * (Math.PI / 180)) *
-      Math.cos(b.lat * (Math.PI / 180)) *
-      Math.sin(dLon / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))
-}
-
-function nearestNeighbor(start: Coord, points: Coord[]): Coord[] {
-  const unvisited = [...points]
-  const ordered: Coord[] = []
-  let current = start
-
-  while (unvisited.length > 0) {
-    let nearestIdx = 0
-    let nearestDist = Infinity
-
-    unvisited.forEach((pt, i) => {
-      const d = haversine(current, pt)
-      if (d < nearestDist) {
-        nearestDist = d
-        nearestIdx = i
-      }
-    })
-
-    const next = unvisited.splice(nearestIdx, 1)[0]
-    ordered.push(next)
-    current = next
-  }
-
-  return ordered
+// ── Route meta ───────────────────────────────────────────────────
+function setRouteMeta(route: RoutePoint[]): void {
+  let km = 0
+  for (let i = 0; i < route.length - 1; i++)
+    km += haversineKm(route[i].coord, route[i + 1].coord)
+  const n = route.length - 2
+  routeMeta.textContent = `${n} CONTROL${n !== 1 ? 'S' : ''} — ${km.toFixed(1)} KM`
 }
 
 // ── Map ───────────────────────────────────────────────────────────
@@ -461,6 +427,7 @@ function onListReorder(): void {
 
   updateListIndices()
   renderMap(resolvedRoute)
+  setRouteMeta(resolvedRoute)
   scheduleSave()
 }
 
@@ -588,6 +555,7 @@ async function runOptimize(): Promise<void> {
       setStatus('GEOCODING START...', 'busy')
       if (needsRateLimit() && needsDelay) await delay(1100)
       resolvedStart = await getGeocoder().geocode(startVal)
+      startCoords = resolvedStart
       needsDelay = true
     }
 
@@ -598,6 +566,7 @@ async function runOptimize(): Promise<void> {
       setStatus('GEOCODING FINISH...', 'busy')
       if (needsRateLimit() && needsDelay) await delay(1100)
       resolvedFinish = await getGeocoder().geocode(finishVal)
+      finishCoords = resolvedFinish
       needsDelay = true
     }
 
@@ -610,21 +579,24 @@ async function runOptimize(): Promise<void> {
       } else {
         setStatus(`GEOCODING CONTROL ${i + 1} OF ${controlEntries.length}...`, 'busy')
         if (needsRateLimit() && needsDelay) await delay(1100)
-        resolvedControls.push(await getGeocoder().geocode(value))
+        const coord = await getGeocoder().geocode(value)
+        controlCoords.set(id, coord)
+        resolvedControls.push(coord)
         needsDelay = true
       }
     }
 
     setStatus('OPTIMIZING ROUTE...', 'busy')
-    const ordered = nearestNeighbor(resolvedStart, resolvedControls)
+    const nodes = [resolvedStart, ...resolvedControls, resolvedFinish]
+    const order = optimizeOrder(buildAirMatrix(nodes), resolvedControls.length)
 
     resolvedRoute = [
       { coord: resolvedStart,  role: 'start',   label: shortLabel(resolvedStart.label),  controlId: null },
-      ...ordered.map(c => ({
-        coord: c,
+      ...order.map(i => ({
+        coord: resolvedControls[i],
         role: 'control' as PointRole,
-        label: shortLabel(c.label),
-        controlId: null,
+        label: shortLabel(resolvedControls[i].label),
+        controlId: controlEntries[i].id,
       })),
       { coord: resolvedFinish, role: 'finish',  label: shortLabel(resolvedFinish.label), controlId: null },
     ]
@@ -634,7 +606,7 @@ async function runOptimize(): Promise<void> {
     buildRouteList(resolvedRoute)
     renderMap(resolvedRoute)
 
-    routeMeta.textContent = `${ordered.length} CONTROL${ordered.length !== 1 ? 'S' : ''}`
+    setRouteMeta(resolvedRoute)
     exportBtn.disabled = false
     setStatus('[OK] ROUTE READY — REORDER IF NEEDED', 'ok')
     routeBlock.scrollIntoView({ behavior: 'smooth' })
@@ -729,8 +701,7 @@ function applyState(saved: Pick<PersistedState, 'startCoords' | 'startLabel' | '
     if (!mapInstance) initMap()
     buildRouteList(resolvedRoute)
     renderMap(resolvedRoute)
-    const controlCount_ = resolvedRoute.filter(p => p.role === 'control').length
-    routeMeta.textContent = `${controlCount_} CONTROL${controlCount_ !== 1 ? 'S' : ''}`
+    setRouteMeta(resolvedRoute)
     exportBtn.disabled = false
   }
 }
@@ -790,62 +761,26 @@ shareBtn.addEventListener('click', () => {
   })
 })
 
-// ── Provider unlock UI ────────────────────────────────────────────
+// ── Provider toggle ───────────────────────────────────────────────
 function updateProviderUI(): void {
-  if (isUnlocked()) {
+  if (getProviderName() === 'google') {
     providerIndicator.textContent = '◉ GOOGLE'
-    providerBtn.classList.add('unlocked')
+    providerBtn.classList.add('provider-google')
   } else {
     providerIndicator.textContent = '◎ MAPBOX'
-    providerBtn.classList.remove('unlocked')
+    providerBtn.classList.remove('provider-google')
   }
 }
 
 providerBtn.addEventListener('click', () => {
-  if (isUnlocked()) {
-    lock()
-    updateProviderUI()
-    setStatus('[OK] SWITCHED TO MAPBOX', 'ok')
-  } else {
-    unlockInput.value = ''
-    unlockError.classList.add('hidden')
-    unlockModal.classList.remove('hidden')
-    setTimeout(() => unlockInput.focus(), 50)
+  const next: ProviderName = getProviderName() === 'google' ? 'mapbox' : 'google'
+  try {
+    switchProvider(next)
+    setStatus(`[OK] ${next.toUpperCase()} GEOCODER ACTIVE`, 'ok')
+  } catch {
+    setStatus(`[ERR] ${next.toUpperCase()} GEOCODER NOT CONFIGURED`, 'error')
   }
-})
-
-modalClose.addEventListener('click', () => {
-  unlockModal.classList.add('hidden')
-})
-
-unlockModal.addEventListener('click', e => {
-  if (e.target === unlockModal) unlockModal.classList.add('hidden')
-})
-
-unlockSubmit.addEventListener('click', () => {
-  void (async () => {
-    unlockSubmit.disabled = true
-    unlockSubmit.textContent = 'CHECKING...'
-
-    const ok = await tryUnlock(unlockInput.value)
-
-    unlockSubmit.disabled = false
-    unlockSubmit.textContent = 'UNLOCK'
-
-    if (ok) {
-      unlockModal.classList.add('hidden')
-      updateProviderUI()
-      setStatus('[OK] GOOGLE GEOCODER ACTIVE', 'ok')
-    } else {
-      unlockError.classList.remove('hidden')
-      unlockInput.select()
-    }
-  })()
-})
-
-unlockInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') unlockSubmit.click()
-  if (e.key === 'Escape') unlockModal.classList.add('hidden')
+  updateProviderUI()
 })
 
 updateProviderUI()
