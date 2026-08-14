@@ -11,9 +11,16 @@ A web tool for alleycat bike racers. Enter your manifest checkpoints, get an opt
 1. Set your **start** — tap GPS or type an address
 2. Set your **finish** — usually the bar
 3. Enter **controls** from the manifest — intersections like "Broad & Girard" work fine
-4. Hit **Optimize** — nearest-neighbor algorithm orders them efficiently
-5. **Drag to reorder** if you want to override
-6. **Export GPX** — load onto your Wahoo via USB, companion app, or wahooapp.com
+4. Hit **Optimize** — finds the shortest start-to-finish order (provably optimal up
+   to 14 controls, near-optimal beyond), using real cycling distances from the
+   Mapbox Matrix API when online and straight-line distances offline (labeled
+   `(AIR)`)
+5. **Drag to reorder** if you want to override — the total distance updates live,
+   with the optimizer's baseline shown as `(OPT x.x)` so you can see what an
+   override costs
+6. **Export GPX** — load onto your Wahoo via USB, companion app, or wahooapp.com;
+   if the routing server is unreachable, a waypoint-only GPX is exported and the
+   Wahoo routes between points on-device
 
 The Wahoo handles on-device routing between waypoints. Checkpoint just gets the points in the right order.
 
@@ -51,6 +58,8 @@ VITE_MAPBOX_TOKEN=pk.eyJ1...
 ```
 
 The provider is auto-selected: Google whenever `VITE_GOOGLE_MAPS_KEY` is set, Mapbox otherwise. Set `VITE_GEOCODER_PROVIDER` only to force a specific one. The header button toggles between the two at runtime.
+
+The Mapbox token is also used for the Matrix API (street-distance route optimization). Set `VITE_STREET_MATRIX=off` to disable those calls and optimize on straight-line distances only — useful as a quota kill switch.
 
 Then start the dev server:
 

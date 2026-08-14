@@ -892,21 +892,29 @@ seeded PRNG for all random instances so failures are reproducible):
 
 ### Phase 3 — Polish (optional, §6)
 
-- [ ] **Stale-route invalidation (A7)** — `markRouteStale()` wired into control
-  `input` listeners (`main.ts:292`), `addControl`, `removeControl`, start/finish
-  listeners; disables Export, dims the route block, status
-  `ROUTE OUT OF DATE — RE-OPTIMIZE`
-- [ ] **Optimizer baseline in the meta line** — after a manual reorder, show
-  `29.1 KM (OPT 27.3)` so the cost of an override stays visible
-- [ ] **Track-less export fallback (A9)** — on `fetchRoute` failure, export a
-  `<rte>`-only GPX with status `[OK] EXPORTED WITHOUT TRACK — WAHOO WILL ROUTE`
-- [ ] **Manual QA** — edit-after-optimize flow, override-cost display, export with
-  network blocked
+- [x] **Stale-route invalidation (A7)** — `markRouteStale()` wired into control
+  `input` listeners, autocomplete selections, `addControl`, `removeControl`,
+  start/finish listeners, and GPS acquisition; disables Export, dims the route
+  block (`.block--stale`), status `ROUTE OUT OF DATE — RE-OPTIMIZE`; cleared on
+  the next successful optimize
+- [x] **Optimizer baseline in the meta line** — after a manual reorder, show
+  `29.1 KM (OPT 27.3)` so the cost of an override stays visible (suppressed while
+  within 0.05 km of the baseline; resets on re-optimize; absent for restored
+  sessions, which have no baseline)
+- [x] **Track-less export fallback (A9)** — on `fetchRoute` failure, export a
+  `<rte>`-only GPX (shared `gpxDocument`/`wptXml` builders) with status
+  `[OK] EXPORTED WITHOUT TRACK — WAHOO WILL ROUTE`
+- [ ] **Manual QA** — *deferred: needs a browser/phone session* —
+  edit-after-optimize flow, override-cost display, export with network blocked
 
 ### Definition of done
 
-- [ ] All boxes above checked, or consciously deferred with a note here
-- [ ] Tests 1–6 in CI-runnable form (`npm run test` green from a fresh clone)
-- [ ] The §3 journeys hold up when walked through by hand on a phone
-- [ ] `README.md` updated if any env variable or behavior described there changed
-  (`VITE_STREET_MATRIX`, distance display)
+- [x] All boxes above checked, or consciously deferred with a note here (deferred:
+  the three manual-QA items and the post-deploy check — everything that needs a
+  browser, a phone, or a production deploy)
+- [x] Tests 1–6 in CI-runnable form (`npm run test` green from a fresh clone —
+  19 tests across `optimize.test.ts` and `matrix.test.ts`)
+- [ ] The §3 journeys hold up when walked through by hand on a phone — *deferred
+  with the manual QA above*
+- [x] `README.md` updated (`VITE_STREET_MATRIX`, optimizer description, distance
+  display, track-less export fallback)

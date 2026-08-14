@@ -192,6 +192,10 @@ body::after {
   position: relative;
 }
 
+.block--stale {
+  opacity: 0.55;
+}
+
 /* Notched top-right corner — gradient so clip-path is gone and dropdowns aren't clipped */
 .block::after {
   content: '';

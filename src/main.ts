@@ -112,6 +112,7 @@ async function getGPS(): Promise<void> {
     gpsBtn.classList.add('locked')
     gpsBtnLabel.textContent = `GPS LOCKED — ${lat.toFixed(4)}, ${lon.toFixed(4)}`
     setStatus('[OK] GPS LOCKED', 'ok')
+    markRouteStale()
     scheduleSave()
   } catch {
     setStatus('[ERR] GPS UNAVAILABLE — ENTER ADDRESS MANUALLY', 'error')
@@ -291,11 +292,12 @@ function addControl(existingId?: number): void {
   row.appendChild(removeBtn)
   controlsList.appendChild(row)
 
-  input.addEventListener('input', () => { controlCoords.delete(id); scheduleSave() })
-  attachAutocomplete(input, coord => { controlCoords.set(id, coord); scheduleSave() })
+  input.addEventListener('input', () => { controlCoords.delete(id); markRouteStale(); scheduleSave() })
+  attachAutocomplete(input, coord => { controlCoords.set(id, coord); markRouteStale(); scheduleSave() })
 
   input.focus()
   renumberControls()
+  markRouteStale()
 }
 
 function removeControl(id: number): void {
@@ -303,6 +305,7 @@ function removeControl(id: number): void {
   if (row) row.remove()
   controlCoords.delete(id)
   renumberControls()
+  markRouteStale()
   scheduleSave()
 }
 
@@ -343,11 +346,24 @@ function routeKm(route: RoutePoint[]): { km: number; street: boolean } {
   return { km, street: false }
 }
 
+let optimizedKm: number | null = null
+
 function setRouteMeta(route: RoutePoint[]): void {
   const { km, street } = routeKm(route)
   const n = route.length - 2
+  const baseline =
+    optimizedKm !== null && Math.abs(km - optimizedKm) > 0.05
+      ? ` (OPT ${optimizedKm.toFixed(1)})`
+      : ''
   routeMeta.textContent =
-    `${n} CONTROL${n !== 1 ? 'S' : ''} — ${km.toFixed(1)} KM${street ? '' : ' (AIR)'}`
+    `${n} CONTROL${n !== 1 ? 'S' : ''} — ${km.toFixed(1)} KM${street ? '' : ' (AIR)'}${baseline}`
+}
+
+function markRouteStale(): void {
+  if (!resolvedRoute) return
+  exportBtn.disabled = true
+  routeBlock.classList.add('block--stale')
+  setStatus('ROUTE OUT OF DATE — RE-OPTIMIZE', 'warn')
 }
 
 // ── Map ───────────────────────────────────────────────────────────
@@ -482,6 +498,28 @@ function escapeXml(str: string): string {
     .replace(/"/g, '&quot;')
 }
 
+function gpxDocument(body: string): string {
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<gpx version="1.1" creator="Checkpoint"\n` +
+    `     xmlns="http://www.topografix.com/GPX/1/1">\n` +
+    `  <metadata>\n` +
+    `    <name>Alleycat Route</name>\n` +
+    `    <time>${new Date().toISOString()}</time>\n` +
+    `  </metadata>\n` +
+    body +
+    `</gpx>`
+  )
+}
+
+function wptXml(p: RoutePoint): string {
+  return (
+    `  <wpt lat="${p.coord.lat.toFixed(6)}" lon="${p.coord.lon.toFixed(6)}">\n` +
+    `    <name>${escapeXml(p.label)}</name>\n` +
+    `  </wpt>`
+  )
+}
+
 function buildRoutedGPX(
   trackPoints: [number, number][],
   waypoints: RoutePoint[]
@@ -492,31 +530,33 @@ function buildRoutedGPX(
     )
     .join('\n')
 
-  const wpts = waypoints
-    .map(
-      p =>
-        `  <wpt lat="${p.coord.lat.toFixed(6)}" lon="${p.coord.lon.toFixed(6)}">\n` +
-        `    <name>${escapeXml(p.label)}</name>\n` +
-        `  </wpt>`
-    )
-    .join('\n')
-
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<gpx version="1.1" creator="Checkpoint"\n` +
-    `     xmlns="http://www.topografix.com/GPX/1/1">\n` +
-    `  <metadata>\n` +
-    `    <name>Alleycat Route</name>\n` +
-    `    <time>${new Date().toISOString()}</time>\n` +
-    `  </metadata>\n` +
-    wpts + '\n' +
+  return gpxDocument(
+    waypoints.map(wptXml).join('\n') + '\n' +
     `  <trk>\n` +
     `    <name>Alleycat Route</name>\n` +
     `    <trkseg>\n` +
     trkpts + '\n' +
     `    </trkseg>\n` +
-    `  </trk>\n` +
-    `</gpx>`
+    `  </trk>\n`
+  )
+}
+
+function buildRouteOnlyGPX(waypoints: RoutePoint[]): string {
+  const rtepts = waypoints
+    .map(
+      p =>
+        `    <rtept lat="${p.coord.lat.toFixed(6)}" lon="${p.coord.lon.toFixed(6)}">\n` +
+        `      <name>${escapeXml(p.label)}</name>\n` +
+        `    </rtept>`
+    )
+    .join('\n')
+
+  return gpxDocument(
+    waypoints.map(wptXml).join('\n') + '\n' +
+    `  <rte>\n` +
+    `    <name>Alleycat Route</name>\n` +
+    rtepts + '\n' +
+    `  </rte>\n`
   )
 }
 
@@ -634,10 +674,12 @@ async function runOptimize(): Promise<void> {
     ]
 
     routeBlock.classList.remove('hidden')
+    routeBlock.classList.remove('block--stale')
     if (!mapInstance) initMap()
     buildRouteList(resolvedRoute)
     renderMap(resolvedRoute)
 
+    optimizedKm = routeKm(resolvedRoute).km
     setRouteMeta(resolvedRoute)
     exportBtn.disabled = false
     setStatus(
@@ -666,11 +708,20 @@ async function runExport(): Promise<void> {
   setStatus('FETCHING ROUTE...', 'busy')
 
   try {
-    const waypoints = resolvedRoute.map(p => p.coord)
-    const trackPoints = await fetchRoute(waypoints)
-    const gpx = buildRoutedGPX(trackPoints, resolvedRoute)
+    let gpx: string
+    let trackless = false
+    try {
+      const trackPoints = await fetchRoute(resolvedRoute.map(p => p.coord))
+      gpx = buildRoutedGPX(trackPoints, resolvedRoute)
+    } catch {
+      gpx = buildRouteOnlyGPX(resolvedRoute)
+      trackless = true
+    }
     await exportGPX(gpx)
-    setStatus('[OK] GPX EXPORTED', 'ok')
+    setStatus(
+      trackless ? '[OK] EXPORTED WITHOUT TRACK — WAHOO WILL ROUTE' : '[OK] GPX EXPORTED',
+      'ok'
+    )
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'UNKNOWN ERROR'
     setStatus(`[ERR] ${msg}`, 'error')
@@ -694,6 +745,7 @@ clearBtn.addEventListener('click', () => {
 })
 
 startInput.addEventListener('input', () => {
+  markRouteStale()
   if (startInput.value.trim().length > 0 && startCoords) {
     startCoords = null
     gpsBtn.classList.remove('locked')
@@ -704,14 +756,15 @@ startInput.addEventListener('input', () => {
 })
 
 finishInput.addEventListener('input', () => {
+  markRouteStale()
   if (finishInput.value.trim().length > 0 && finishCoords) {
     finishCoords = null
     scheduleSave()
   }
 })
 
-attachAutocomplete(startInput,  coord => { startCoords  = coord; scheduleSave() })
-attachAutocomplete(finishInput, coord => { finishCoords = coord; scheduleSave() })
+attachAutocomplete(startInput,  coord => { startCoords  = coord; markRouteStale(); scheduleSave() })
+attachAutocomplete(finishInput, coord => { finishCoords = coord; markRouteStale(); scheduleSave() })
 
 // ── Restore or init ───────────────────────────────────────────────
 function applyState(saved: Pick<PersistedState, 'startCoords' | 'startLabel' | 'finishCoords' | 'finishLabel' | 'controls' | 'controlCount' | 'resolvedRoute'>): void {
