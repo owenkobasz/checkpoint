@@ -64,8 +64,8 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 `ANTHROPIC_API_KEY` is **server-side only** (no `VITE_` prefix — it must never
-ship in the client bundle). It powers manifest scanning and is only read by the
-serverless function, so it's only needed when running through `vercel dev`.
+ship in the client bundle). It powers manifest scanning and is read only by the
+serverless function in production and by the Vite dev middleware locally.
 
 The provider is auto-selected: Google whenever `VITE_GOOGLE_MAPS_KEY` is set, Mapbox otherwise. Set `VITE_GEOCODER_PROVIDER` only to force a specific one. The header button toggles between the two at runtime.
 
@@ -77,9 +77,10 @@ Then start the dev server:
 npm run dev
 ```
 
-`npm run dev` serves everything except manifest scanning (the scan button reports
-`SCAN UNAVAILABLE IN THIS BUILD`). To exercise scanning locally, run `vercel dev`
-instead — it serves the Vite app and the `api/` function on one origin.
+Manifest scanning works under plain `npm run dev` too: a Vite dev middleware
+(see `vite.config.ts`) serves `/api/scan-manifest` using the same handler code
+as the deployed function, reading `ANTHROPIC_API_KEY` from `.env.local`. Without
+the key set, scans fail with a clean error and manual entry is unaffected.
 
 ### Mapbox setup
 

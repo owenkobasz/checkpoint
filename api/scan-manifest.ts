@@ -69,25 +69,29 @@ checkpoints ("controls") racers must visit. Extract every checkpoint location.
 - Do not invent checkpoints. If a line is illegible, either omit it or return
   your best reading with confidence "low".`
 
-interface ScanRequestBody {
+export interface ScanRequestBody {
   image?: string
   mediaType?: string
   hint?: string
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'method not allowed' })
-    return
-  }
+export interface ScanOutcome {
+  status: number
+  body: string
+}
 
-  const origin = req.headers.origin
+function jsonError(status: number, error: string): ScanOutcome {
+  return { status, body: JSON.stringify({ error }) }
+}
+
+export async function processScan(
+  origin: string | undefined,
+  body: ScanRequestBody
+): Promise<ScanOutcome> {
   if (origin && !originAllowed(origin)) {
-    res.status(403).json({ error: 'forbidden' })
-    return
+    return jsonError(403, 'forbidden')
   }
 
-  const body = (req.body ?? {}) as ScanRequestBody
   const { image, mediaType, hint } = body
   if (
     typeof image !== 'string' ||
@@ -95,8 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     image.length > MAX_IMAGE_CHARS ||
     mediaType !== 'image/jpeg'
   ) {
-    res.status(400).json({ error: 'bad image payload' })
-    return
+    return jsonError(400, 'bad image payload')
   }
   const safeHint = typeof hint === 'string' ? hint.slice(0, MAX_HINT_CHARS) : null
 
@@ -133,12 +136,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     })
 
     if (response.stop_reason === 'refusal') {
-      res.status(502).json({ error: 'scan declined' })
-      return
+      return jsonError(502, 'scan declined')
     }
     if (response.stop_reason === 'max_tokens') {
-      res.status(502).json({ error: 'scan output truncated' })
-      return
+      return jsonError(502, 'scan output truncated')
     }
 
     const text = response.content.find(b => b.type === 'text')?.text ?? ''
@@ -154,7 +155,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       })
     )
 
-    res.status(200).setHeader('content-type', 'application/json').send(text)
+    return { status: 200, body: text }
   } catch (err) {
     console.error(
       JSON.stringify({
@@ -163,6 +164,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         message: err instanceof Error ? err.message : 'unknown',
       })
     )
-    res.status(502).json({ error: 'scan failed' })
+    return jsonError(502, 'scan failed')
   }
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'method not allowed' })
+    return
+  }
+
+  const outcome = await processScan(req.headers.origin, (req.body ?? {}) as ScanRequestBody)
+  res.status(outcome.status).setHeader('content-type', 'application/json').send(outcome.body)
 }

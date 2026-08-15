@@ -617,7 +617,10 @@ Phases are ordered by dependency: each phase is independently testable before th
   - [x] One structured log line per request (image chars, checkpoint count, latency ms, model) and per failure — never image data
 - [x] Handler signature settled: went with the classic Node signature (`(req: VercelRequest, res: VercelResponse)` from `@vercel/node`) rather than the Web-standard one — this `package.json` has no `"type": "module"`, so the Node signature avoids the ESM-detection gamble entirely
 - [x] TypeScript config for `api/`: scoped `api/tsconfig.json` with `"types": ["node"]`; `npm run typecheck` now runs `tsc --noEmit && tsc -p api --noEmit`
-- [ ] **OPERATOR:** Verify with `curl` against `vercel dev` using real photos: printed manifest, handwritten manifest, sideways (EXIF-rotated) photo, and a non-manifest photo (expect an empty/near-empty `checkpoints` array, not hallucinated entries) — needs a real API key
+- [x] Post-implementation addition: `processScan()` extracted as a framework-neutral core (origin + parsed body → `{status, body}`), with the Vercel handler reduced to a thin adapter — enables the dev middleware below without duplicating logic
+- [x] Post-implementation addition: `vite.config.ts` now serves `/api/scan-manifest` under plain `npm run dev` via a `configureServer` middleware calling `processScan()`, loading `ANTHROPIC_API_KEY` from `.env.local` through `loadEnv` (never exposed to the client — no `VITE_` prefix). Added after field testing showed the first scan attempt happened under `npm run dev`, where the endpoint 404'd; `vercel dev`/`vercel link` is no longer required for local development
+- [x] Verified end-to-end with the real API key against a synthetic printed-manifest photo, both by invoking the handler directly and via `npm run dev` + HTTP POST: 4/4 checkpoints extracted, city detected ("Philadelphia"), note captured ("selfie"), ~6 s latency, structured log line emitted, HTTP 200
+- [ ] **OPERATOR:** Remaining photo-variety checks with real photos: handwritten manifest, sideways (EXIF-rotated) photo, and a non-manifest photo (expect an empty/near-empty `checkpoints` array, not hallucinated entries)
 
 ### Phase 2 — Client scan module (§3.2) ✅
 
@@ -698,7 +701,7 @@ Manual test matrix — **OPERATOR: all items pending** (needs a real API key, `v
 - [ ] Double-scan of the same page → 100% dupes skipped
 - [ ] Manifest with two checkpoints on the same street → **two rows** (dedupe regression case)
 - [ ] ★ Airplane mode → clean `[ERR] SCAN FAILED — CONTINUE MANUAL ENTRY`, manual entry unaffected
-- [ ] `npm run dev` (no function) → 404 → `SCAN UNAVAILABLE IN THIS BUILD`
+- [x] ~~`npm run dev` (no function) → 404~~ → superseded: `npm run dev` now serves the endpoint via dev middleware (verified with a live scan); without `ANTHROPIC_API_KEY` in `.env.local` the scan fails cleanly (502) and manual entry is unaffected
 - [ ] Preview deploy with `ANTHROPIC_API_KEY` deliberately unset → 500 → clean client error
 - [ ] Reload mid-review → amber flags and notes survive restore, no keyboard pop on load
 - [ ] Optimize twice in a row → second run issues zero geocode requests (3.6a)
