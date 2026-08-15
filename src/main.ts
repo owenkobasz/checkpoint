@@ -10,6 +10,7 @@ import { fetchRoute } from './router'
 import { saveState, loadState, clearState } from './persistence'
 import type { PersistedState, PersistedControl, RoutePoint, PointRole } from './persistence'
 import { buildShareURL, loadShareURL } from './share'
+import { scanManifest, isDuplicate, cityTokenSet, labelWithCity } from './scan'
 
 // ── Types ───────────────────────────────────────────────────────
 type StatusType = 'ok' | 'warn' | 'error' | 'busy'
@@ -22,6 +23,14 @@ let resolvedRoute: RoutePoint[] | null = null
 
 const controlCoords = new Map<number, Coord>()
 
+interface ControlMeta {
+  source:   'manual' | 'scanned'
+  note:     string | null
+  verified: boolean
+}
+
+const controlMeta = new Map<number, ControlMeta>()
+
 let mapInstance:   L.Map         | null = null
 let markersLayer:  L.LayerGroup  | null = null
 let polylineLayer: L.Polyline    | null = null
@@ -30,13 +39,24 @@ let sortable:      Sortable      | null = null
 // ── Persistence ─────────────────────────────────────────────────
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
-function persistCurrentState(): void {
+function collectControls(): PersistedControl[] {
   const controls: PersistedControl[] = []
   controlsList.querySelectorAll<HTMLElement>('.control-row').forEach(row => {
     const id    = parseInt(row.dataset['id'] ?? '0', 10)
     const input = row.querySelector<HTMLInputElement>('input')
-    controls.push({ id, inputLabel: input?.value ?? '', coord: controlCoords.get(id) ?? null })
+    const meta  = controlMeta.get(id)
+    controls.push({
+      id,
+      inputLabel: input?.value ?? '',
+      coord: controlCoords.get(id) ?? null,
+      ...(meta ? { source: meta.source, note: meta.note, verified: meta.verified } : {}),
+    })
   })
+  return controls
+}
+
+function persistCurrentState(): void {
+  const controls = collectControls()
 
   const state: PersistedState = {
     version:       1,
@@ -80,6 +100,9 @@ const routeList   = document.getElementById('route-list')    as HTMLOListElement
 
 const providerBtn       = document.getElementById('providerBtn')       as HTMLButtonElement
 const providerIndicator = document.getElementById('providerIndicator') as HTMLSpanElement
+
+const scanBtn       = document.getElementById('scanBtn')       as HTMLButtonElement
+const scanFileInput = document.getElementById('scanFileInput') as HTMLInputElement
 
 // ── Status bar ──────────────────────────────────────────────────
 function setStatus(msg: string, type: StatusType = 'ok'): void {
@@ -164,7 +187,7 @@ function attachAutocomplete(
       inputEl.value = shortLabel(coord.label)
       inputEl.disabled = true
       try {
-        coord = await getGeocoder().geocode(coord.label)
+        coord = await getGeocoder().geocode(coord.label, startCoords ?? undefined)
       } finally {
         inputEl.disabled = false
       }
@@ -217,7 +240,7 @@ function attachAutocomplete(
       controller = new AbortController()
       const signal = controller.signal
 
-      getGeocoder().suggest(query, signal)
+      getGeocoder().suggest(query, signal, startCoords ?? undefined)
         .then(results => { if (!signal.aborted) show(results) })
         .catch(() => {})
     }, 500)
@@ -247,8 +270,26 @@ function attachAutocomplete(
 }
 
 // ── Controls list ────────────────────────────────────────────────
-function addControl(existingId?: number): void {
-  const id = existingId ?? ++controlCount
+interface AddControlOptions {
+  existingId?: number
+  prefill?:   string
+  note?:      string | null
+  scanned?:   boolean
+  verified?:  boolean
+  focus?:     boolean
+}
+
+function clearScannedFlag(id: number): void {
+  const meta = controlMeta.get(id)
+  if (!meta || meta.source !== 'scanned' || meta.verified) return
+  meta.verified = true
+  controlsList
+    .querySelector(`.control-row[data-id="${id}"]`)
+    ?.classList.remove('control-row--scanned')
+}
+
+function addControl(opts: AddControlOptions = {}): void {
+  const id = opts.existingId ?? ++controlCount
 
   const row = document.createElement('div')
   row.className = 'control-row'
@@ -276,6 +317,16 @@ function addControl(existingId?: number): void {
   input.id = `control-${id}`
   input.placeholder = 'INTERSECTION OR ADDRESS'
   input.autocomplete = 'off'
+  if (opts.prefill) input.value = opts.prefill
+
+  if (opts.scanned) {
+    controlMeta.set(id, {
+      source:   'scanned',
+      note:     opts.note ?? null,
+      verified: opts.verified ?? false,
+    })
+    if (!(opts.verified ?? false)) row.classList.add('control-row--scanned')
+  }
 
   const removeBtn = document.createElement('button')
   removeBtn.type = 'button'
@@ -287,15 +338,32 @@ function addControl(existingId?: number): void {
   inputRow.appendChild(input)
   wrap.appendChild(inputRow)
 
+  if (opts.note) {
+    const noteEl = document.createElement('div')
+    noteEl.className = 'control-note'
+    noteEl.textContent = opts.note
+    wrap.appendChild(noteEl)
+  }
+
   row.appendChild(indexSpan)
   row.appendChild(wrap)
   row.appendChild(removeBtn)
   controlsList.appendChild(row)
 
-  input.addEventListener('input', () => { controlCoords.delete(id); markRouteStale(); scheduleSave() })
-  attachAutocomplete(input, coord => { controlCoords.set(id, coord); markRouteStale(); scheduleSave() })
+  input.addEventListener('input', () => {
+    controlCoords.delete(id)
+    clearScannedFlag(id)
+    markRouteStale()
+    scheduleSave()
+  })
+  attachAutocomplete(input, coord => {
+    controlCoords.set(id, coord)
+    clearScannedFlag(id)
+    markRouteStale()
+    scheduleSave()
+  })
 
-  input.focus()
+  if (opts.focus !== false) input.focus()
   renumberControls()
   markRouteStale()
 }
@@ -304,6 +372,7 @@ function removeControl(id: number): void {
   const row = controlsList.querySelector(`.control-row[data-id="${id}"]`)
   if (row) row.remove()
   controlCoords.delete(id)
+  controlMeta.delete(id)
   renumberControls()
   markRouteStale()
   scheduleSave()
@@ -580,6 +649,69 @@ async function exportGPX(gpxString: string): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
+// ── Manifest scan ─────────────────────────────────────────────────
+let scanInFlight = false
+
+function existingControlValues(): string[] {
+  return Array.from(controlsList.querySelectorAll<HTMLInputElement>('.control-row input'))
+    .map(i => i.value.trim())
+    .filter(v => v.length > 0)
+}
+
+async function runScan(file: File): Promise<void> {
+  if (scanInFlight) return
+  scanInFlight = true
+  scanBtn.disabled = true
+  scanBtn.textContent = '▣ SCANNING...'
+  setStatus('SCANNING MANIFEST — KEEP ENTERING CONTROLS', 'busy')
+
+  try {
+    const hint = startInput.value.trim()
+      || (startCoords ? `${startCoords.lat.toFixed(4)}, ${startCoords.lon.toFixed(4)}` : null)
+
+    const result = await scanManifest(file, hint)
+    const cityTok = cityTokenSet(result.city)
+
+    let added = 0, low = 0, skipped = 0
+    for (const cp of result.checkpoints) {
+      // Re-read existing rows on every iteration: the racer may have typed a
+      // new control while this loop's earlier rows were being added, and
+      // earlier scanned rows must dedupe against later ones in this batch.
+      if (existingControlValues().some(v => isDuplicate(v, cp.name, cityTok))) {
+        skipped++
+        continue
+      }
+      addControl({
+        prefill: labelWithCity(cp.name, result.city),
+        note:    cp.note,
+        scanned: true,
+        focus:   false,
+      })
+      added++
+      if (cp.confidence === 'low') low++
+    }
+
+    scheduleSave()
+    const reoptimize = resolvedRoute !== null && added > 0 ? ' — RE-OPTIMIZE TO INCLUDE' : ''
+    if (added === 0 && skipped === 0) {
+      setStatus('[WARN] NO CHECKPOINTS FOUND — RETAKE PHOTO OR ENTER MANUALLY', 'warn')
+    } else {
+      const parts = [`${added} SCANNED`]
+      if (skipped > 0) parts.push(`${skipped} DUPES SKIPPED`)
+      if (low > 0)     parts.push(`${low} LOW CONFIDENCE`)
+      setStatus(`[OK] ${parts.join(' — ')} — VERIFY AMBER ROWS${reoptimize}`, low > 0 ? 'warn' : 'ok')
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'SCAN FAILED'
+    setStatus(`[ERR] ${msg} — CONTINUE MANUAL ENTRY`, 'error')
+  } finally {
+    scanInFlight = false
+    scanBtn.disabled = false
+    scanBtn.textContent = '▣ SCAN MANIFEST'
+    scanFileInput.value = ''
+  }
+}
+
 // ── Core flow ─────────────────────────────────────────────────────
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -623,7 +755,7 @@ async function runOptimize(): Promise<void> {
     } else {
       setStatus('GEOCODING START...', 'busy')
       if (needsRateLimit() && needsDelay) await delay(1100)
-      resolvedStart = await getGeocoder().geocode(startVal)
+      resolvedStart = await getGeocoder().geocode(startVal, finishCoords ?? undefined)
       startCoords = resolvedStart
       needsDelay = true
     }
@@ -634,7 +766,7 @@ async function runOptimize(): Promise<void> {
     } else {
       setStatus('GEOCODING FINISH...', 'busy')
       if (needsRateLimit() && needsDelay) await delay(1100)
-      resolvedFinish = await getGeocoder().geocode(finishVal)
+      resolvedFinish = await getGeocoder().geocode(finishVal, resolvedStart)
       finishCoords = resolvedFinish
       needsDelay = true
     }
@@ -648,7 +780,7 @@ async function runOptimize(): Promise<void> {
       } else {
         setStatus(`GEOCODING CONTROL ${i + 1} OF ${controlEntries.length}...`, 'busy')
         if (needsRateLimit() && needsDelay) await delay(1100)
-        const coord = await getGeocoder().geocode(value)
+        const coord = await getGeocoder().geocode(value, resolvedStart)
         controlCoords.set(id, coord)
         resolvedControls.push(coord)
         needsDelay = true
@@ -734,6 +866,11 @@ async function runExport(): Promise<void> {
 // ── Event listeners ───────────────────────────────────────────────
 gpsBtn.addEventListener('click', () => { void getGPS() })
 addBtn.addEventListener('click', () => addControl())
+scanBtn.addEventListener('click', () => scanFileInput.click())
+scanFileInput.addEventListener('change', () => {
+  const file = scanFileInput.files?.[0]
+  if (file) void runScan(file)
+})
 optimizeBtn.addEventListener('click', () => { void runOptimize() })
 exportBtn.addEventListener('click', () => { void runExport() })
 clearBtn.addEventListener('click', () => {
@@ -781,9 +918,14 @@ function applyState(saved: Pick<PersistedState, 'startCoords' | 'startLabel' | '
   }
 
   saved.controls.forEach(ctrl => {
-    addControl(ctrl.id)
-    const input = document.getElementById(`control-${ctrl.id}`) as HTMLInputElement | null
-    if (input && ctrl.inputLabel) input.value = ctrl.inputLabel
+    addControl({
+      existingId: ctrl.id,
+      prefill:    ctrl.inputLabel || undefined,
+      note:       ctrl.note ?? null,
+      scanned:    ctrl.source === 'scanned',
+      verified:   ctrl.verified ?? false,
+      focus:      false,
+    })
     if (ctrl.coord) controlCoords.set(ctrl.id, ctrl.coord)
   })
 
@@ -828,12 +970,6 @@ if (!restoreFromSaved()) addControl()
 
 shareBtn.addEventListener('click', () => {
   persistCurrentState()
-  const controls_: PersistedControl[] = []
-  controlsList.querySelectorAll<HTMLElement>('.control-row').forEach(row => {
-    const id    = parseInt(row.dataset['id'] ?? '0', 10)
-    const input = row.querySelector<HTMLInputElement>('input')
-    controls_.push({ id, inputLabel: input?.value ?? '', coord: controlCoords.get(id) ?? null })
-  })
   const snap: PersistedState = {
     version:       1,
     savedAt:       Date.now(),
@@ -841,7 +977,7 @@ shareBtn.addEventListener('click', () => {
     startCoords,
     finishLabel:   finishInput.value,
     finishCoords,
-    controls:      controls_,
+    controls:      collectControls(),
     controlCount,
     resolvedRoute,
   }

@@ -7,10 +7,11 @@ export class MapboxGeocoder implements GeocoderProvider {
     this.token = token
   }
 
-  async geocode(query: string): Promise<Coord> {
+  async geocode(query: string, near?: Coord): Promise<Coord> {
     const url =
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json` +
-      `?access_token=${this.token}&limit=1`
+      `?access_token=${this.token}&limit=1` +
+      (near ? `&proximity=${near.lon},${near.lat}` : '')
 
     const res = await fetch(url)
     if (!res.ok) throw new Error(`GEOCODER ERROR (${res.status})`)
@@ -32,10 +33,11 @@ export class MapboxGeocoder implements GeocoderProvider {
     }
   }
 
-  async suggest(query: string, signal: AbortSignal): Promise<Coord[]> {
+  async suggest(query: string, signal: AbortSignal, near?: Coord): Promise<Coord[]> {
     const url =
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json` +
-      `?access_token=${this.token}&autocomplete=true&types=address,place,poi&limit=5`
+      `?access_token=${this.token}&autocomplete=true&types=address,place,poi&limit=5` +
+      (near ? `&proximity=${near.lon},${near.lat}` : '')
 
     const res = await fetch(url, { signal })
     if (!res.ok) return []

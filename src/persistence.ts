@@ -13,6 +13,9 @@ export interface PersistedControl {
   id:         number
   inputLabel: string
   coord:      Coord | null
+  source?:    'manual' | 'scanned'
+  note?:      string | null
+  verified?:  boolean
 }
 
 export interface PersistedState {

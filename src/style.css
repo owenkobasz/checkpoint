@@ -440,6 +440,60 @@ body::after {
   color: var(--green-dim);
 }
 
+.scan-btn {
+  width: 100%;
+  padding: 12px;
+  background: none;
+  border: 1px dashed var(--amber-warn);
+  color: var(--amber-warn);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  margin-top: 8px;
+  min-height: 44px;
+  opacity: 0.75;
+  transition: opacity 0.1s;
+}
+
+.scan-btn:hover {
+  opacity: 1;
+}
+
+.scan-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.control-row--scanned .control-index {
+  color: var(--amber-warn);
+}
+
+.control-row--scanned .input-row {
+  border-color: var(--amber-warn);
+}
+
+.control-row--scanned .input-row::after {
+  content: 'SCAN?';
+  font-size: var(--font-xs);
+  color: var(--amber-warn);
+  border: 1px solid var(--amber-warn);
+  padding: 1px 4px;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+.control-note {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Block meta ────────────────────────────────────────────────── */
 .block-meta {
   margin-left: auto;

@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "api/scan-manifest.ts": { "maxDuration": 60 }
+  }
+}

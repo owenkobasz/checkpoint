@@ -593,99 +593,104 @@ Base64 in JSON adds ~33% to a 300 KB upload (~100 KB — irrelevant on LTE) and 
 
 Phases are ordered by dependency: each phase is independently testable before the next begins, and Phases 4–6 can proceed in any order once Phase 3 lands. Section references point back into Part 3.
 
-### Phase 0 — Prerequisites & environment
+> **Status: implemented on branch `manifest-scan` (off `dev`).** Unchecked boxes are operator actions (API key, Vercel dashboard, phone-in-hand testing) that code cannot complete. Deviations from the plan as written are noted inline — the plan was drafted against `main`, and `dev`'s route-quality merge had already landed part of it.
 
-- [ ] `npm i @anthropic-ai/sdk` (server-side only; verify client bundle size is unchanged after a `npm run build`)
-- [ ] Create an Anthropic API key at console.anthropic.com; set a monthly spend limit (~$10) on the workspace
-- [ ] Add `ANTHROPIC_API_KEY` to `.env.local` (already gitignored) for `vercel dev`
-- [ ] Add `ANTHROPIC_API_KEY` to Vercel → Settings → Environment Variables, marked Sensitive, no `VITE_` prefix, all environments
-- [ ] Run `vercel link` if the local repo isn't linked; confirm `vercel dev` serves the Vite app on one origin
-- [ ] Add `vitest` as a devDependency + a `"test"` script (the repo has no test runner today; the dedupe logic in Phase 2 needs real unit tests, and vitest is the zero-config choice for a Vite project)
+### Phase 0 — Prerequisites & environment ✅ (code side)
 
-### Phase 1 — Server function (§3.1)
+- [x] `npm i @anthropic-ai/sdk` (server-side only; client bundle verified clean — no `anthropic` string in `dist/assets`). Also added `@vercel/node` (dev) for the function's request/response types
+- [ ] **OPERATOR:** Create an Anthropic API key at console.anthropic.com; set a monthly spend limit (~$10) on the workspace
+- [ ] **OPERATOR:** Add `ANTHROPIC_API_KEY` to `.env.local` for `vercel dev` — a commented placeholder line is in place, fill in the real key
+- [ ] **OPERATOR:** Add `ANTHROPIC_API_KEY` to Vercel → Settings → Environment Variables, marked Sensitive, no `VITE_` prefix, all environments
+- [ ] **OPERATOR:** Run `vercel link` if the local repo isn't linked; confirm `vercel dev` serves the Vite app on one origin
+- [x] ~~Add `vitest`~~ — already present on `dev` (route-quality merge added it with `matrix.test.ts` / `optimize.test.ts`); nothing to do
 
-- [ ] Create `vercel.json` with `{ "functions": { "api/scan-manifest.ts": { "maxDuration": 60 } } }`
-- [ ] Create `api/scan-manifest.ts`:
-  - [ ] `SCHEMA` constant (structured-outputs JSON schema: `city`, `checkpoints[].{name, note, confidence}`, `additionalProperties: false` throughout, `anyOf` for nullables)
-  - [ ] `PROMPT` constant (extract checkpoints only; tasks → `note`; no invention; illegible → omit or `confidence: "low"`)
-  - [ ] Request validation: JSON parse guard, `mediaType === 'image/jpeg'`, `MAX_IMAGE_CHARS` (4 M chars) cap, 120-char `hint` cap
-  - [ ] Origin check (`originAllowed`: allowlist + `.vercel.app` preview suffix; absent Origin passes)
-  - [ ] Anthropic call: `claude-opus-5`, `max_tokens: 8192`, `output_config: { effort: 'low', format: json_schema }`, `betas: ['server-side-fallback-2026-07-01']`, `fallbacks: 'default'`
-  - [ ] Error paths: `stop_reason === 'refusal'` → 502, `stop_reason === 'max_tokens'` → 502, pass-through of the schema-validated text block on success
-  - [ ] One structured log line per request (image chars, checkpoint count, latency ms, model) and per failure — never image data
-- [ ] Settle the handler signature: try the Web-standard `export async function POST(request: Request)`; if the build doesn't treat the file as ESM, switch to the `(req, res)` Node signature with `@vercel/node` types (same logic)
-- [ ] TypeScript config for `api/`: either extend root `tsconfig.json` `include` or add a scoped `api/tsconfig.json` with `"types": ["node"]`; `npm run typecheck` must cover the function
-- [ ] Verify with `curl` against `vercel dev` using real photos: printed manifest, handwritten manifest, sideways (EXIF-rotated) photo, and a non-manifest photo (expect an empty/near-empty `checkpoints` array, not hallucinated entries)
+### Phase 1 — Server function (§3.1) ✅ (code side)
 
-### Phase 2 — Client scan module (§3.2)
+- [x] Create `vercel.json` with `{ "functions": { "api/scan-manifest.ts": { "maxDuration": 60 } } }`
+- [x] Create `api/scan-manifest.ts`:
+  - [x] `SCHEMA` constant (structured-outputs JSON schema: `city`, `checkpoints[].{name, note, confidence}`, `additionalProperties: false` throughout, `anyOf` for nullables)
+  - [x] `PROMPT` constant (extract checkpoints only; tasks → `note`; no invention; illegible → omit or `confidence: "low"`)
+  - [x] Request validation: method guard, body field checks, `mediaType === 'image/jpeg'`, `MAX_IMAGE_CHARS` (4 M chars) cap, 120-char `hint` cap
+  - [x] Origin check (`originAllowed`: allowlist + `.vercel.app` preview suffix; absent Origin passes)
+  - [x] Anthropic call: `claude-opus-5`, `max_tokens: 8192`, `output_config: { effort: 'low', format: json_schema }`, `betas: ['server-side-fallback-2026-07-01']`, `fallbacks: 'default'` (all typed in SDK 0.117.1 — no casts needed)
+  - [x] Error paths: `stop_reason === 'refusal'` → 502, `stop_reason === 'max_tokens'` → 502, thrown API/key errors → 502, pass-through of the schema-validated text block on success
+  - [x] One structured log line per request (image chars, checkpoint count, latency ms, model) and per failure — never image data
+- [x] Handler signature settled: went with the classic Node signature (`(req: VercelRequest, res: VercelResponse)` from `@vercel/node`) rather than the Web-standard one — this `package.json` has no `"type": "module"`, so the Node signature avoids the ESM-detection gamble entirely
+- [x] TypeScript config for `api/`: scoped `api/tsconfig.json` with `"types": ["node"]`; `npm run typecheck` now runs `tsc --noEmit && tsc -p api --noEmit`
+- [x] Post-implementation addition: `processScan()` extracted as a framework-neutral core (origin + parsed body → `{status, body}`), with the Vercel handler reduced to a thin adapter — enables the dev middleware below without duplicating logic
+- [x] Post-implementation addition: `vite.config.ts` now serves `/api/scan-manifest` under plain `npm run dev` via a `configureServer` middleware calling `processScan()`, loading `ANTHROPIC_API_KEY` from `.env.local` through `loadEnv` (never exposed to the client — no `VITE_` prefix). Added after field testing showed the first scan attempt happened under `npm run dev`, where the endpoint 404'd; `vercel dev`/`vercel link` is no longer required for local development
+- [x] Verified end-to-end with the real API key against a synthetic printed-manifest photo, both by invoking the handler directly and via `npm run dev` + HTTP POST: 4/4 checkpoints extracted, city detected ("Philadelphia"), note captured ("selfie"), ~6 s latency, structured log line emitted, HTTP 200
+- [ ] **OPERATOR:** Remaining photo-variety checks with real photos: handwritten manifest, sideways (EXIF-rotated) photo, and a non-manifest photo (expect an empty/near-empty `checkpoints` array, not hallucinated entries)
 
-- [ ] Create `src/scan.ts`:
-  - [ ] `ScannedCheckpoint` / `ScanResult` interfaces
-  - [ ] `compressImage()`: `createImageBitmap(file, { imageOrientation: 'from-image' })`, downscale to `MAX_EDGE` 2048, JPEG q0.8, base64 without data-URL prefix
-  - [ ] `scanManifest()`: POST with 45 s `AbortController` timeout; 404 → "SCAN UNAVAILABLE IN THIS BUILD"; non-OK → status-coded error; response shape guard (`Array.isArray(checkpoints)`)
-  - [ ] Dedupe internals: `STOPWORDS`, `normalize()` (lowercase, `&`→`and`, punctuation strip, street-suffix strip), `tokens()`
-  - [ ] Exports: `cityTokenSet()`, `isDuplicate(a, b, cityTokens?)` (0.75 overlap vs smaller set; 1-token sets require exact equality), `labelWithCity()`
-- [ ] Unit tests (vitest) for the pure functions — minimum cases:
-  - [ ] "broad and girard" = "Broad & Girard" (dup)
-  - [ ] "Broad & Girard" = "Broad & Girard, Philadelphia" with city tokens stripped (dup)
-  - [ ] **"Broad & Girard, Philadelphia" ≠ "Broad & Master, Philadelphia"** (same-street regression test — bug in this plan's first draft)
-  - [ ] "2nd & Poplar" ≠ "4th & Poplar" (not dup)
-  - [ ] "Girard" ≠ "Front & Girard" (1-token equality rule) and "Girard" = "Girard Ave" (suffix strip)
-  - [ ] Stopword-only / empty strings never match anything
-  - [ ] `labelWithCity` appends only when the city isn't already in the name
-  - [ ] Known accepted false negative documented in a test: "2nd" ≠ "Second"
+### Phase 2 — Client scan module (§3.2) ✅
 
-### Phase 3 — UI wiring (§3.3, §3.4)
+- [x] Create `src/scan.ts`:
+  - [x] `ScannedCheckpoint` / `ScanResult` interfaces
+  - [x] `compressImage()`: `createImageBitmap(file, { imageOrientation: 'from-image' })`, downscale to `MAX_EDGE` 2048, JPEG q0.8, base64 without data-URL prefix
+  - [x] `scanManifest()`: POST with 45 s `AbortController` timeout; 404 → "SCAN UNAVAILABLE IN THIS BUILD"; non-OK → status-coded error; response shape guard (`Array.isArray(checkpoints)`)
+  - [x] Dedupe internals: `STOPWORDS`, `normalize()` (lowercase, `&`→`and`, punctuation strip, street-suffix strip), `tokens()`
+  - [x] Exports: `cityTokenSet()`, `isDuplicate(a, b, cityTokens?)` (0.75 overlap vs smaller set; 1-token sets require exact equality), `labelWithCity()`
+- [x] Unit tests (`src/scan.test.ts`, 15 tests, all passing) — every minimum case covered:
+  - [x] "broad and girard" = "Broad & Girard" (dup)
+  - [x] "Broad & Girard" = "Broad & Girard, Philadelphia" with city tokens stripped (dup)
+  - [x] **"Broad & Girard, Philadelphia" ≠ "Broad & Master, Philadelphia"** (same-street regression test — bug in this plan's first draft)
+  - [x] "2nd & Poplar" ≠ "4th & Poplar" (not dup)
+  - [x] "Girard" ≠ "Front & Girard" (1-token equality rule) and "Girard" = "Girard Ave" (suffix strip)
+  - [x] Stopword-only / empty strings never match anything
+  - [x] `labelWithCity` appends only when the city isn't already in the name
+  - [x] Known accepted false negative documented in a test: "2nd" ≠ "Second" (plus named-place and multi-word-city cases)
 
-- [ ] `index.html`: `▣ SCAN MANIFEST` button + hidden `<input type="file" accept="image/*" capture="environment">` in the `[03] CONTROLS` block
-- [ ] `style.css`: `.scan-btn` (add-btn style, amber accent), `.control-row--scanned` amber index + `SCAN?` chip, `.control-note` subtitle line
-- [ ] `main.ts` — `addControl()` refactor to `AddControlOptions` (`existingId`, `prefill`, `note`, `scanned`, `focus`):
-  - [ ] Update the `applyState()` call site from `addControl(ctrl.id)` to `addControl({ existingId: ctrl.id, focus: false })` (also kills the restore-time keyboard pop)
-  - [ ] Confirm the add-button call site (`addControl()`) still compiles unchanged
-  - [ ] Note rendering: `.control-note` div under `.input-row` when `note` is set
-- [ ] `main.ts` — scanned-row state:
-  - [ ] `controlMeta` map (`source`/`note`/`verified`)
-  - [ ] `clearScannedFlag(id)` wired into the row's `input` listener and autocomplete `onSelect`
-  - [ ] `removeControl()` also deletes from `controlMeta`
-- [ ] `main.ts` — `runScan()` orchestration:
-  - [ ] `scanInFlight` guard; button disabled + label swap during flight; everything else stays enabled
-  - [ ] `hint` from start input text, else GPS coords, else null
-  - [ ] Merge loop: re-read existing row values per iteration; `isDuplicate` with `cityTokenSet`; `labelWithCity` prefill; counts for added/skipped/low
-  - [ ] Status messages: success with counts, dupes-skipped, low-confidence warning, `RE-OPTIMIZE TO INCLUDE` when `resolvedRoute !== null`, empty-result warning, error path `[ERR] … — CONTINUE MANUAL ENTRY`
-  - [ ] `finally`: reset flag/button, clear `scanFileInput.value`
-  - [ ] `scheduleSave()` after merge
-- [ ] Wire `scanBtn` click → file input click; file input `change` → `runScan`
+### Phase 3 — UI wiring (§3.3, §3.4) ✅
 
-### Phase 4 — Persistence (§3.5)
+- [x] `index.html`: `▣ SCAN MANIFEST` button + hidden `<input type="file" accept="image/*" capture="environment">` in the `[03] CONTROLS` block
+- [x] `style.css`: `.scan-btn` (add-btn style, amber accent), `.control-row--scanned` amber index/border + `SCAN?` chip (`.input-row::after`), `.control-note` subtitle line
+- [x] `main.ts` — `addControl()` refactor to `AddControlOptions` (`existingId`, `prefill`, `note`, `scanned`, `verified`, `focus` — `verified` added so restore can recreate an already-reviewed scanned row without re-flagging it):
+  - [x] Update the `applyState()` call site to the options form with `focus: false` (also kills the restore-time keyboard pop)
+  - [x] Confirm the add-button call site (`addControl()`) still compiles unchanged
+  - [x] Note rendering: `.control-note` div under `.input-row` when `note` is set
+- [x] `main.ts` — scanned-row state:
+  - [x] `controlMeta` map (`source`/`note`/`verified`)
+  - [x] `clearScannedFlag(id)` wired into the row's `input` listener and autocomplete `onSelect`
+  - [x] `removeControl()` also deletes from `controlMeta`
+- [x] `main.ts` — `runScan()` orchestration:
+  - [x] `scanInFlight` guard; button disabled + label swap during flight; everything else stays enabled
+  - [x] `hint` from start input text, else GPS coords, else null
+  - [x] Merge loop: re-read existing row values per iteration (`existingControlValues()`); `isDuplicate` with `cityTokenSet`; `labelWithCity` prefill; counts for added/skipped/low
+  - [x] Status messages: success with counts, dupes-skipped, low-confidence warning, `RE-OPTIMIZE TO INCLUDE` when `resolvedRoute !== null`, empty-result warning, error path `[ERR] … — CONTINUE MANUAL ENTRY`. Note: `dev`'s `markRouteStale()` also fires for each appended row, disabling export and marking the route block stale — the two mechanisms compose correctly (stale styling from `markRouteStale`, final status line from `runScan`)
+  - [x] `finally`: reset flag/button, clear `scanFileInput.value`
+  - [x] `scheduleSave()` after merge
+- [x] Wire `scanBtn` click → file input click; file input `change` → `runScan`
 
-- [ ] `persistence.ts`: add optional `source` / `note` / `verified` to `PersistedControl` (no version bump)
-- [ ] `main.ts`: `persistCurrentState()` and the share-button snapshot include `controlMeta` values
-- [ ] `applyState()`: restore notes and the amber flag for `source === 'scanned' && !verified`; repopulate `controlMeta`
-- [ ] Verify `share.ts` needs no change (payload shape untouched) and old localStorage payloads still restore
+### Phase 4 — Persistence (§3.5) ✅
 
-### Phase 5 — Geocoding improvements (§3.6)
+- [x] `persistence.ts`: add optional `source` / `note` / `verified` to `PersistedControl` (no version bump)
+- [x] `main.ts`: `persistCurrentState()` and the share-button snapshot both read `controlMeta` via a new shared `collectControls()` helper (the two previously duplicated the same collection loop — consolidated rather than duplicated a third time)
+- [x] `applyState()`: restores notes and the amber flag for `source === 'scanned' && !verified`; repopulates `controlMeta` through `addControl`'s `scanned`/`verified`/`note` options
+- [x] `share.ts` verified unchanged (payload shape untouched); old localStorage payloads restore — the new fields are optional and absent-safe
 
-- [ ] 3.6a: in `runOptimize()`'s control-resolve loop, write each geocode result back with `controlCoords.set(id, resolved)` + `scheduleSave()`; verify a second Optimize issues zero geocode requests
-- [ ] 3.6b: extend `GeocoderProvider` (`geocode(query, near?)`, `suggest(query, signal, near?)`)
-- [ ] `providers/mapbox.ts`: append `&proximity=${near.lon},${near.lat}` in both methods when provided
-- [ ] `providers/google.ts` / `providers/nominatim.ts`: accept and ignore the new param (signature compatibility only)
-- [ ] Call sites: `runOptimize()` passes `startCoords ?? finishCoords`; `attachAutocomplete` passes `startCoords`
+### Phase 5 — Geocoding improvements (§3.6) ✅
 
-### Phase 6 — Docs & housekeeping (§3.7)
+- [x] 3.6a: ~~write geocode results back into `controlCoords`~~ — **already implemented on `dev`** (the route-quality merge added `controlCoords.set(id, coord)` in `runOptimize`'s resolve loop, plus start/finish caching); verified present, nothing to do
+- [x] 3.6b: extend `GeocoderProvider` (`geocode(query, near?)`, `suggest(query, signal, near?)`)
+- [x] `providers/mapbox.ts`: append `&proximity=${near.lon},${near.lat}` in both methods when provided
+- [x] `providers/google.ts` / `providers/nominatim.ts`: **no change needed** — TypeScript's structural typing lets their shorter signatures satisfy the widened interface, and the plan's `_near` placeholder params would have tripped `noUnusedParameters` anyway
+- [x] Call sites: `runOptimize()` passes `finishCoords` for start / `resolvedStart` for finish and controls; `attachAutocomplete` and its geocode-on-select path pass `startCoords`
 
-- [ ] README: `ANTHROPIC_API_KEY` in the env-var table and Vercel deploy steps (with the redeploy-after-env-change reminder), `vercel dev` local-dev section, amend "Fully static — no server required" to note the one optional function, per-scan cost note
-- [ ] `.env` template: commented `# ANTHROPIC_API_KEY=` line with the "server-side only, never VITE_-prefixed" warning
-- [ ] `package.json` version bump + `index.html` header `v0.x.x` if that convention is being kept
+### Phase 6 — Docs & housekeeping (§3.7) ✅
 
-### Phase 7 — Verification & release
+- [x] README: scan feature in "What it does" and the tech-stack list, `ANTHROPIC_API_KEY` in local-dev env block and Vercel deploy steps (with Sensitive marking, spend-limit note, and per-scan cost), `vercel dev` local-dev note, "Fully static" build claim amended
+- [x] `.env` template: commented `# ANTHROPIC_API_KEY=` line with the "server-side only, never VITE_-prefixed" warning (matching placeholder also appended to `.env.local`). Note: both files are gitignored on `dev`, so these edits are local-machine only — the README carries the canonical documentation
+- [x] `package.json` + `index.html` header bumped to v0.2.0
+
+### Phase 7 — Verification & release (build gates ✅; device/deploy testing pending)
 
 Build gates:
 
-- [ ] `npm run typecheck` clean (including `api/`)
-- [ ] `npm test` clean (dedupe suite)
-- [ ] `npm run build` clean; client bundle size unchanged vs. main
+- [x] `npm run typecheck` clean (root `src/` and `api/` projects)
+- [x] `npm test` clean (34 tests across scan/matrix/optimize suites)
+- [x] `npm run build` clean; `dist/assets` contains no Anthropic SDK code (grep-verified — the SDK lives only in the serverless function)
 
-Manual test matrix (on `vercel dev`, then repeat the starred items on a Vercel preview deploy from a phone):
+Manual test matrix — **OPERATOR: all items pending** (needs a real API key, `vercel dev`, and a phone; run on `vercel dev`, then repeat the starred items on a Vercel preview deploy from a phone):
 
 - [ ] ★ Printed manifest photo → correct rows, city appended, notes shown
 - [ ] ★ Handwritten manifest → partial results acceptable, `low` confidence flagged
@@ -696,19 +701,19 @@ Manual test matrix (on `vercel dev`, then repeat the starred items on a Vercel p
 - [ ] Double-scan of the same page → 100% dupes skipped
 - [ ] Manifest with two checkpoints on the same street → **two rows** (dedupe regression case)
 - [ ] ★ Airplane mode → clean `[ERR] SCAN FAILED — CONTINUE MANUAL ENTRY`, manual entry unaffected
-- [ ] `npm run dev` (no function) → 404 → `SCAN UNAVAILABLE IN THIS BUILD`
+- [x] ~~`npm run dev` (no function) → 404~~ → superseded: `npm run dev` now serves the endpoint via dev middleware (verified with a live scan); without `ANTHROPIC_API_KEY` in `.env.local` the scan fails cleanly (502) and manual entry is unaffected
 - [ ] Preview deploy with `ANTHROPIC_API_KEY` deliberately unset → 500 → clean client error
 - [ ] Reload mid-review → amber flags and notes survive restore, no keyboard pop on load
 - [ ] Optimize twice in a row → second run issues zero geocode requests (3.6a)
 - [ ] Share link after optimizing a scanned route → recipient gets all controls with coords
 - [ ] Non-manifest photo (e.g. a selfie) → empty-result warning, no hallucinated rows
 
-Release:
+Release — **OPERATOR: all items pending**:
 
 - [ ] Verify function logs in `vercel logs` show the structured line and no image data
 - [ ] Confirm Anthropic console shows expected per-scan cost; spend limit is active
 - [ ] If on a paid Vercel plan: add the WAF rate-limit rule for `/api/scan-manifest` (§Part 2, step 3)
-- [ ] Merge to `main`, production deploy, one live smoke-test scan from a phone on cellular
+- [ ] Merge `manifest-scan` → `dev` → `main`, production deploy, one live smoke-test scan from a phone on cellular
 
 ## Open Questions
 
