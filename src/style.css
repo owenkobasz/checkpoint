@@ -724,3 +724,12 @@ body::after {
 .share-btn:hover {
   opacity: 1;
 }
+
+.wahoo-hint {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  letter-spacing: 0.08em;
+  text-align: center;
+  line-height: 1.5;
+}

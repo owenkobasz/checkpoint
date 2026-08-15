@@ -11,6 +11,7 @@ import { saveState, loadState, clearState } from './persistence'
 import type { PersistedState, PersistedControl, RoutePoint, PointRole } from './persistence'
 import { buildShareURL, loadShareURL } from './share'
 import { scanManifest, isDuplicate, cityTokenSet, labelWithCity } from './scan'
+import { exportGPX, isIOS } from './export'
 
 // ── Types ───────────────────────────────────────────────────────
 type StatusType = 'ok' | 'warn' | 'error' | 'busy'
@@ -97,6 +98,7 @@ const shareBtn    = document.getElementById('shareBtn')      as HTMLButtonElemen
 const routeBlock  = document.getElementById('block-route')   as HTMLElement
 const routeMeta   = document.getElementById('routeMeta')     as HTMLSpanElement
 const routeList   = document.getElementById('route-list')    as HTMLOListElement
+const wahooHint   = document.getElementById('wahooHint')     as HTMLParagraphElement
 
 const providerBtn       = document.getElementById('providerBtn')       as HTMLButtonElement
 const providerIndicator = document.getElementById('providerIndicator') as HTMLSpanElement
@@ -629,26 +631,6 @@ function buildRouteOnlyGPX(waypoints: RoutePoint[]): string {
   )
 }
 
-async function exportGPX(gpxString: string): Promise<void> {
-  const filename = `checkpoint-${Date.now()}.gpx`
-  const file = new File([gpxString], filename, { type: 'application/octet-stream' })
-
-  if (navigator.canShare?.({ files: [file] })) {
-    await navigator.share({ files: [file], title: 'Alleycat Route' })
-    return
-  }
-
-  // Fallback: direct download
-  const url = URL.createObjectURL(file)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
-
 // ── Manifest scan ─────────────────────────────────────────────────
 let scanInFlight = false
 
@@ -849,11 +831,17 @@ async function runExport(): Promise<void> {
       gpx = buildRouteOnlyGPX(resolvedRoute)
       trackless = true
     }
-    await exportGPX(gpx)
-    setStatus(
-      trackless ? '[OK] EXPORTED WITHOUT TRACK — WAHOO WILL ROUTE' : '[OK] GPX EXPORTED',
-      'ok'
-    )
+    const outcome = await exportGPX(gpx)
+    if (outcome === 'cancelled') {
+      setStatus('EXPORT CANCELLED', 'ok')
+    } else if (outcome === 'downloaded' && isIOS()) {
+      setStatus('[OK] SAVED — FILES ▸ DOWNLOADS ▸ SHARE ▸ ELEMNT', 'ok')
+    } else {
+      setStatus(
+        trackless ? '[OK] EXPORTED WITHOUT TRACK — WAHOO WILL ROUTE' : '[OK] GPX EXPORTED',
+        'ok'
+      )
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'UNKNOWN ERROR'
     setStatus(`[ERR] ${msg}`, 'error')
@@ -967,6 +955,8 @@ function restoreFromSaved(): boolean {
 }
 
 if (!restoreFromSaved()) addControl()
+
+if (isIOS()) wahooHint.classList.remove('hidden')
 
 shareBtn.addEventListener('click', () => {
   persistCurrentState()
