@@ -5,6 +5,6 @@ export interface Coord {
 }
 
 export interface GeocoderProvider {
-  geocode(query: string): Promise<Coord>
-  suggest(query: string, signal: AbortSignal): Promise<Coord[]>
+  geocode(query: string, near?: Coord): Promise<Coord>
+  suggest(query: string, signal: AbortSignal, near?: Coord): Promise<Coord[]>
 }

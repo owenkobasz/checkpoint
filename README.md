@@ -10,7 +10,11 @@ A web tool for alleycat bike racers. Enter your manifest checkpoints, get an opt
 
 1. Set your **start** — tap GPS or type an address
 2. Set your **finish** — usually the bar
-3. Enter **controls** from the manifest — intersections like "Broad & Girard" work fine
+3. Enter **controls** from the manifest — intersections like "Broad & Girard" work fine.
+   Or tap **Scan Manifest** and photograph the sheet: checkpoints are extracted
+   automatically (via a serverless function calling Claude vision) and appended as
+   amber "verify me" rows while you keep typing. Scanned rows dedupe against what
+   you've already entered.
 4. Hit **Optimize** — finds the shortest start-to-finish order (provably optimal up
    to 14 controls, near-optimal beyond), using real cycling distances from the
    Mapbox Matrix API when online and straight-line distances offline (labeled
@@ -33,6 +37,7 @@ The Wahoo handles on-device routing between waypoints. Checkpoint just gets the 
 - **Google Maps JS API** — default address autocomplete and geocoding (referer-restricted browser key)
 - **Mapbox Geocoding API** — fallback provider, toggleable in the header
 - **SortableJS** — drag-and-drop reordering
+- **Anthropic API** — manifest photo → checkpoint extraction, via one Vercel serverless function (`api/scan-manifest.ts`)
 
 ---
 
@@ -55,7 +60,12 @@ Edit `.env.local` with your keys:
 ```
 VITE_GOOGLE_MAPS_KEY=AIzaSy...
 VITE_MAPBOX_TOKEN=pk.eyJ1...
+ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+`ANTHROPIC_API_KEY` is **server-side only** (no `VITE_` prefix — it must never
+ship in the client bundle). It powers manifest scanning and is only read by the
+serverless function, so it's only needed when running through `vercel dev`.
 
 The provider is auto-selected: Google whenever `VITE_GOOGLE_MAPS_KEY` is set, Mapbox otherwise. Set `VITE_GEOCODER_PROVIDER` only to force a specific one. The header button toggles between the two at runtime.
 
@@ -66,6 +76,10 @@ Then start the dev server:
 ```bash
 npm run dev
 ```
+
+`npm run dev` serves everything except manifest scanning (the scan button reports
+`SCAN UNAVAILABLE IN THIS BUILD`). To exercise scanning locally, run `vercel dev`
+instead — it serves the Vite app and the `api/` function on one origin.
 
 ### Mapbox setup
 
@@ -96,7 +110,9 @@ Under **API restrictions** limit it to the three APIs above. Since the key ships
 npm run build
 ```
 
-Output goes to `dist/`. Fully static — no server required.
+Output goes to `dist/`. The app is a static build plus one serverless function
+(`api/scan-manifest.ts`) for manifest scanning — everything else works without
+any server, and the app degrades cleanly if the function is absent.
 
 ---
 
@@ -110,6 +126,9 @@ Output goes to `dist/`. Fully static — no server required.
 4. Add the environment variables in Settings → Environment Variables:
    - `VITE_GOOGLE_MAPS_KEY` = your Google key (makes Google the default provider)
    - `VITE_MAPBOX_TOKEN` = your full Mapbox token (fallback provider)
+   - `ANTHROPIC_API_KEY` = your Anthropic key (manifest scanning; mark it
+     Sensitive, no `VITE_` prefix — set a monthly spend limit on the Anthropic
+     console as the abuse backstop, roughly $0.03–0.06 per scan)
    - Do **not** set `VITE_GEOCODER_PROVIDER` unless you want to force a provider
 5. Settings → Domains → add your custom domain
 6. After adding or changing env vars, trigger a redeploy — Vercel doesn't rebuild automatically
