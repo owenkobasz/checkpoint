@@ -708,12 +708,15 @@ Manual test matrix — **OPERATOR: all items pending** (needs a real API key, `v
 - [ ] Share link after optimizing a scanned route → recipient gets all controls with coords
 - [ ] Non-manifest photo (e.g. a selfie) → empty-result warning, no hallucinated rows
 
-Release — **OPERATOR: all items pending**:
+Release:
 
-- [ ] Verify function logs in `vercel logs` show the structured line and no image data
-- [ ] Confirm Anthropic console shows expected per-scan cost; spend limit is active
-- [ ] If on a paid Vercel plan: add the WAF rate-limit rule for `/api/scan-manifest` (§Part 2, step 3)
-- [ ] Merge `manifest-scan` → `dev` → `main`, production deploy, one live smoke-test scan from a phone on cellular
+- [x] Merged `manifest-scan` → `dev` → fast-forwarded `main`; pushed all three branches; Vercel Git integration auto-deployed
+- [x] First production deploy hit `FUNCTION_INVOCATION_FAILED` — the compiled function used `import` syntax but Node loaded it as CJS (the plan's flagged ESM-detection gamble, resolved the other way in Vercel's builder vs. the local harness). Fixed with a scoped `api/package.json` (`{"type": "module"}`); hotfix deployed clean
+- [x] Live smoke tests against checkpoint.bike: homepage serves v0.2.0 with the scan button; bad payload → 400 `bad image payload`; real manifest photo → 200 with 4/4 checkpoints, city, and note (~6 s)
+- [x] Production runtime logs verified: structured `{"event":"scan",...}` line present, no image data
+- [ ] **OPERATOR:** Confirm Anthropic console shows expected per-scan cost; spend limit is active
+- [ ] **OPERATOR:** If on a paid Vercel plan: add the WAF rate-limit rule for `/api/scan-manifest` (§Part 2, step 3)
+- [ ] **OPERATOR:** One scan from a phone camera on cellular (validates EXIF rotation + camera capture path in the field)
 
 ## Open Questions
 
