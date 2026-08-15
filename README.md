@@ -11,9 +11,16 @@ A web tool for alleycat bike racers. Enter your manifest checkpoints, get an opt
 1. Set your **start** — tap GPS or type an address
 2. Set your **finish** — usually the bar
 3. Enter **controls** from the manifest — intersections like "Broad & Girard" work fine
-4. Hit **Optimize** — nearest-neighbor algorithm orders them efficiently
-5. **Drag to reorder** if you want to override
-6. **Export GPX** — load onto your Wahoo via USB, companion app, or wahooapp.com
+4. Hit **Optimize** — finds the shortest start-to-finish order (provably optimal up
+   to 14 controls, near-optimal beyond), using real cycling distances from the
+   Mapbox Matrix API when online and straight-line distances offline (labeled
+   `(AIR)`)
+5. **Drag to reorder** if you want to override — the total distance updates live,
+   with the optimizer's baseline shown as `(OPT x.x)` so you can see what an
+   override costs
+6. **Export GPX** — load onto your Wahoo via USB, companion app, or wahooapp.com;
+   if the routing server is unreachable, a waypoint-only GPX is exported and the
+   Wahoo routes between points on-device
 
 The Wahoo handles on-device routing between waypoints. Checkpoint just gets the points in the right order.
 
@@ -23,8 +30,8 @@ The Wahoo handles on-device routing between waypoints. Checkpoint just gets the 
 
 - **Vite + TypeScript** — build tooling
 - **Leaflet + OpenStreetMap** — map preview, no API key required
-- **Mapbox Geocoding API** — default address autocomplete and geocoding
-- **Google Maps JS API** — enhanced geocoding, unlocked via access code
+- **Google Maps JS API** — default address autocomplete and geocoding (referer-restricted browser key)
+- **Mapbox Geocoding API** — fallback provider, toggleable in the header
 - **SortableJS** — drag-and-drop reordering
 
 ---
@@ -46,30 +53,19 @@ cp .env .env.local
 Edit `.env.local` with your keys:
 
 ```
-VITE_GEOCODER_PROVIDER=mapbox
-VITE_MAPBOX_TOKEN=pk.eyJ1...
 VITE_GOOGLE_MAPS_KEY=AIzaSy...
-VITE_UNLOCK_HASH=sha256_hex_of_your_access_code
+VITE_MAPBOX_TOKEN=pk.eyJ1...
 ```
+
+The provider is auto-selected: Google whenever `VITE_GOOGLE_MAPS_KEY` is set, Mapbox otherwise. Set `VITE_GEOCODER_PROVIDER` only to force a specific one. The header button toggles between the two at runtime.
+
+The Mapbox token is also used for the Matrix API (street-distance route optimization). Set `VITE_STREET_MATRIX=off` to disable those calls and optimize on straight-line distances only — useful as a quota kill switch.
 
 Then start the dev server:
 
 ```bash
 npm run dev
 ```
-
-### Generating the unlock hash
-
-The Google geocoder is gated behind an access code. The hash of that code is stored in `VITE_UNLOCK_HASH` — never the code itself. To generate it, run this in any browser console on an HTTPS page:
-
-```javascript
-crypto.subtle
-  .digest('SHA-256', new TextEncoder().encode('your-access-code'))
-  .then(buf => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join(''))
-  .then(console.log)
-```
-
-Paste the printed hex string into `VITE_UNLOCK_HASH`.
 
 ### Mapbox setup
 
@@ -85,7 +81,12 @@ Go to [console.cloud.google.com](https://console.cloud.google.com) and enable th
 - Places API
 - Geocoding API
 
-Create an API key. Under **Application restrictions** set it to **None** (the Geocoding REST API does not support HTTP referrer restrictions — restrict by API instead). Under **API restrictions** limit it to the three APIs above.
+Create an API key. All Google calls go through the Maps **JS** API (geocoding included), so the key can and should be locked down. Under **Application restrictions** choose **Websites** and add:
+
+- `http://localhost:5173/*` for local dev
+- `https://your-production-domain/*` for live
+
+Under **API restrictions** limit it to the three APIs above. Since the key ships in the browser bundle, also set a daily quota cap on each API as a billing backstop.
 
 ---
 
@@ -106,11 +107,10 @@ Output goes to `dist/`. Fully static — no server required.
 1. Push to GitHub
 2. Import the repo at vercel.com → New Project
 3. Vercel auto-detects Vite — build command `npm run build`, output dir `dist`
-4. Add all four environment variables in Settings → Environment Variables:
-   - `VITE_GEOCODER_PROVIDER` = `mapbox`
-   - `VITE_MAPBOX_TOKEN` = your full Mapbox token
-   - `VITE_GOOGLE_MAPS_KEY` = your Google key
-   - `VITE_UNLOCK_HASH` = your hash
+4. Add the environment variables in Settings → Environment Variables:
+   - `VITE_GOOGLE_MAPS_KEY` = your Google key (makes Google the default provider)
+   - `VITE_MAPBOX_TOKEN` = your full Mapbox token (fallback provider)
+   - Do **not** set `VITE_GEOCODER_PROVIDER` unless you want to force a provider
 5. Settings → Domains → add your custom domain
 6. After adding or changing env vars, trigger a redeploy — Vercel doesn't rebuild automatically
 

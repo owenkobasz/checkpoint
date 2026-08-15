@@ -2,9 +2,10 @@ import './style.css'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import Sortable from 'sortablejs'
-import { getGeocoder, getProviderName } from './geocoder'
-import type { Coord } from './geocoder'
-import { tryUnlock, isUnlocked, lock } from './unlock'
+import { getGeocoder, getProviderName, switchProvider } from './geocoder'
+import type { Coord, ProviderName } from './geocoder'
+import { buildAirMatrix, optimizeOrder, haversineKm } from './optimize'
+import { fetchCyclingMatrix, clearMatrixCache } from './matrix'
 import { fetchRoute } from './router'
 import { saveState, loadState, clearState } from './persistence'
 import type { PersistedState, PersistedControl, RoutePoint, PointRole } from './persistence'
@@ -79,11 +80,6 @@ const routeList   = document.getElementById('route-list')    as HTMLOListElement
 
 const providerBtn       = document.getElementById('providerBtn')       as HTMLButtonElement
 const providerIndicator = document.getElementById('providerIndicator') as HTMLSpanElement
-const unlockModal       = document.getElementById('unlockModal')       as HTMLDivElement
-const unlockInput       = document.getElementById('unlockInput')       as HTMLInputElement
-const unlockSubmit      = document.getElementById('unlockSubmit')      as HTMLButtonElement
-const unlockError       = document.getElementById('unlockError')       as HTMLParagraphElement
-const modalClose        = document.getElementById('modalClose')        as HTMLButtonElement
 
 // ── Status bar ──────────────────────────────────────────────────
 function setStatus(msg: string, type: StatusType = 'ok'): void {
@@ -116,6 +112,7 @@ async function getGPS(): Promise<void> {
     gpsBtn.classList.add('locked')
     gpsBtnLabel.textContent = `GPS LOCKED — ${lat.toFixed(4)}, ${lon.toFixed(4)}`
     setStatus('[OK] GPS LOCKED', 'ok')
+    markRouteStale()
     scheduleSave()
   } catch {
     setStatus('[ERR] GPS UNAVAILABLE — ENTER ADDRESS MANUALLY', 'error')
@@ -295,11 +292,12 @@ function addControl(existingId?: number): void {
   row.appendChild(removeBtn)
   controlsList.appendChild(row)
 
-  input.addEventListener('input', () => { controlCoords.delete(id); scheduleSave() })
-  attachAutocomplete(input, coord => { controlCoords.set(id, coord); scheduleSave() })
+  input.addEventListener('input', () => { controlCoords.delete(id); markRouteStale(); scheduleSave() })
+  attachAutocomplete(input, coord => { controlCoords.set(id, coord); markRouteStale(); scheduleSave() })
 
   input.focus()
   renumberControls()
+  markRouteStale()
 }
 
 function removeControl(id: number): void {
@@ -307,6 +305,7 @@ function removeControl(id: number): void {
   if (row) row.remove()
   controlCoords.delete(id)
   renumberControls()
+  markRouteStale()
   scheduleSave()
 }
 
@@ -317,42 +316,54 @@ function renumberControls(): void {
   })
 }
 
-// ── Optimization ─────────────────────────────────────────────────
-function haversine(a: Coord, b: Coord): number {
-  const R = 6371
-  const dLat = (b.lat - a.lat) * (Math.PI / 180)
-  const dLon = (b.lon - a.lon) * (Math.PI / 180)
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * (Math.PI / 180)) *
-      Math.cos(b.lat * (Math.PI / 180)) *
-      Math.sin(dLon / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))
+// ── Route meta ───────────────────────────────────────────────────
+let displayCtx: { nodes: Coord[]; km: Float64Array; street: boolean } | null = null
+
+function coordKey(c: Coord): string {
+  return `${c.lat.toFixed(6)},${c.lon.toFixed(6)}`
 }
 
-function nearestNeighbor(start: Coord, points: Coord[]): Coord[] {
-  const unvisited = [...points]
-  const ordered: Coord[] = []
-  let current = start
-
-  while (unvisited.length > 0) {
-    let nearestIdx = 0
-    let nearestDist = Infinity
-
-    unvisited.forEach((pt, i) => {
-      const d = haversine(current, pt)
-      if (d < nearestDist) {
-        nearestDist = d
-        nearestIdx = i
-      }
-    })
-
-    const next = unvisited.splice(nearestIdx, 1)[0]
-    ordered.push(next)
-    current = next
+function routeKm(route: RoutePoint[]): { km: number; street: boolean } {
+  if (displayCtx) {
+    const m = displayCtx.nodes.length
+    const index = new Map(displayCtx.nodes.map((c, i) => [coordKey(c), i]))
+    const ids: number[] = []
+    for (const p of route) {
+      const id = index.get(coordKey(p.coord))
+      if (id === undefined) break
+      ids.push(id)
+    }
+    if (ids.length === route.length) {
+      let km = 0
+      for (let k = 0; k < ids.length - 1; k++)
+        km += displayCtx.km[ids[k] * m + ids[k + 1]]
+      return { km, street: displayCtx.street }
+    }
   }
+  let km = 0
+  for (let i = 0; i < route.length - 1; i++)
+    km += haversineKm(route[i].coord, route[i + 1].coord)
+  return { km, street: false }
+}
 
-  return ordered
+let optimizedKm: number | null = null
+
+function setRouteMeta(route: RoutePoint[]): void {
+  const { km, street } = routeKm(route)
+  const n = route.length - 2
+  const baseline =
+    optimizedKm !== null && Math.abs(km - optimizedKm) > 0.05
+      ? ` (OPT ${optimizedKm.toFixed(1)})`
+      : ''
+  routeMeta.textContent =
+    `${n} CONTROL${n !== 1 ? 'S' : ''} — ${km.toFixed(1)} KM${street ? '' : ' (AIR)'}${baseline}`
+}
+
+function markRouteStale(): void {
+  if (!resolvedRoute) return
+  exportBtn.disabled = true
+  routeBlock.classList.add('block--stale')
+  setStatus('ROUTE OUT OF DATE — RE-OPTIMIZE', 'warn')
 }
 
 // ── Map ───────────────────────────────────────────────────────────
@@ -461,6 +472,7 @@ function onListReorder(): void {
 
   updateListIndices()
   renderMap(resolvedRoute)
+  setRouteMeta(resolvedRoute)
   scheduleSave()
 }
 
@@ -486,6 +498,28 @@ function escapeXml(str: string): string {
     .replace(/"/g, '&quot;')
 }
 
+function gpxDocument(body: string): string {
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<gpx version="1.1" creator="Checkpoint"\n` +
+    `     xmlns="http://www.topografix.com/GPX/1/1">\n` +
+    `  <metadata>\n` +
+    `    <name>Alleycat Route</name>\n` +
+    `    <time>${new Date().toISOString()}</time>\n` +
+    `  </metadata>\n` +
+    body +
+    `</gpx>`
+  )
+}
+
+function wptXml(p: RoutePoint): string {
+  return (
+    `  <wpt lat="${p.coord.lat.toFixed(6)}" lon="${p.coord.lon.toFixed(6)}">\n` +
+    `    <name>${escapeXml(p.label)}</name>\n` +
+    `  </wpt>`
+  )
+}
+
 function buildRoutedGPX(
   trackPoints: [number, number][],
   waypoints: RoutePoint[]
@@ -496,31 +530,33 @@ function buildRoutedGPX(
     )
     .join('\n')
 
-  const wpts = waypoints
-    .map(
-      p =>
-        `  <wpt lat="${p.coord.lat.toFixed(6)}" lon="${p.coord.lon.toFixed(6)}">\n` +
-        `    <name>${escapeXml(p.label)}</name>\n` +
-        `  </wpt>`
-    )
-    .join('\n')
-
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<gpx version="1.1" creator="Checkpoint"\n` +
-    `     xmlns="http://www.topografix.com/GPX/1/1">\n` +
-    `  <metadata>\n` +
-    `    <name>Alleycat Route</name>\n` +
-    `    <time>${new Date().toISOString()}</time>\n` +
-    `  </metadata>\n` +
-    wpts + '\n' +
+  return gpxDocument(
+    waypoints.map(wptXml).join('\n') + '\n' +
     `  <trk>\n` +
     `    <name>Alleycat Route</name>\n` +
     `    <trkseg>\n` +
     trkpts + '\n' +
     `    </trkseg>\n` +
-    `  </trk>\n` +
-    `</gpx>`
+    `  </trk>\n`
+  )
+}
+
+function buildRouteOnlyGPX(waypoints: RoutePoint[]): string {
+  const rtepts = waypoints
+    .map(
+      p =>
+        `    <rtept lat="${p.coord.lat.toFixed(6)}" lon="${p.coord.lon.toFixed(6)}">\n` +
+        `      <name>${escapeXml(p.label)}</name>\n` +
+        `    </rtept>`
+    )
+    .join('\n')
+
+  return gpxDocument(
+    waypoints.map(wptXml).join('\n') + '\n' +
+    `  <rte>\n` +
+    `    <name>Alleycat Route</name>\n` +
+    rtepts + '\n' +
+    `  </rte>\n`
   )
 }
 
@@ -588,6 +624,7 @@ async function runOptimize(): Promise<void> {
       setStatus('GEOCODING START...', 'busy')
       if (needsRateLimit() && needsDelay) await delay(1100)
       resolvedStart = await getGeocoder().geocode(startVal)
+      startCoords = resolvedStart
       needsDelay = true
     }
 
@@ -598,6 +635,7 @@ async function runOptimize(): Promise<void> {
       setStatus('GEOCODING FINISH...', 'busy')
       if (needsRateLimit() && needsDelay) await delay(1100)
       resolvedFinish = await getGeocoder().geocode(finishVal)
+      finishCoords = resolvedFinish
       needsDelay = true
     }
 
@@ -610,33 +648,46 @@ async function runOptimize(): Promise<void> {
       } else {
         setStatus(`GEOCODING CONTROL ${i + 1} OF ${controlEntries.length}...`, 'busy')
         if (needsRateLimit() && needsDelay) await delay(1100)
-        resolvedControls.push(await getGeocoder().geocode(value))
+        const coord = await getGeocoder().geocode(value)
+        controlCoords.set(id, coord)
+        resolvedControls.push(coord)
         needsDelay = true
       }
     }
 
     setStatus('OPTIMIZING ROUTE...', 'busy')
-    const ordered = nearestNeighbor(resolvedStart, resolvedControls)
+    const nodes = [resolvedStart, ...resolvedControls, resolvedFinish]
+    const street = await fetchCyclingMatrix(nodes)
+    const objective = street ? street.seconds : buildAirMatrix(nodes)
+    const order = optimizeOrder(objective, resolvedControls.length)
+    displayCtx = street ? { nodes, km: street.km, street: true } : null
 
     resolvedRoute = [
       { coord: resolvedStart,  role: 'start',   label: shortLabel(resolvedStart.label),  controlId: null },
-      ...ordered.map(c => ({
-        coord: c,
+      ...order.map(i => ({
+        coord: resolvedControls[i],
         role: 'control' as PointRole,
-        label: shortLabel(c.label),
-        controlId: null,
+        label: shortLabel(resolvedControls[i].label),
+        controlId: controlEntries[i].id,
       })),
       { coord: resolvedFinish, role: 'finish',  label: shortLabel(resolvedFinish.label), controlId: null },
     ]
 
     routeBlock.classList.remove('hidden')
+    routeBlock.classList.remove('block--stale')
     if (!mapInstance) initMap()
     buildRouteList(resolvedRoute)
     renderMap(resolvedRoute)
 
-    routeMeta.textContent = `${ordered.length} CONTROL${ordered.length !== 1 ? 'S' : ''}`
+    optimizedKm = routeKm(resolvedRoute).km
+    setRouteMeta(resolvedRoute)
     exportBtn.disabled = false
-    setStatus('[OK] ROUTE READY — REORDER IF NEEDED', 'ok')
+    setStatus(
+      street
+        ? '[OK] ROUTE READY (STREET-ROUTED) — REORDER IF NEEDED'
+        : '[OK] ROUTE READY (AIR DISTANCES) — REORDER IF NEEDED',
+      'ok'
+    )
     routeBlock.scrollIntoView({ behavior: 'smooth' })
     scheduleSave()
 
@@ -657,11 +708,20 @@ async function runExport(): Promise<void> {
   setStatus('FETCHING ROUTE...', 'busy')
 
   try {
-    const waypoints = resolvedRoute.map(p => p.coord)
-    const trackPoints = await fetchRoute(waypoints)
-    const gpx = buildRoutedGPX(trackPoints, resolvedRoute)
+    let gpx: string
+    let trackless = false
+    try {
+      const trackPoints = await fetchRoute(resolvedRoute.map(p => p.coord))
+      gpx = buildRoutedGPX(trackPoints, resolvedRoute)
+    } catch {
+      gpx = buildRouteOnlyGPX(resolvedRoute)
+      trackless = true
+    }
     await exportGPX(gpx)
-    setStatus('[OK] GPX EXPORTED', 'ok')
+    setStatus(
+      trackless ? '[OK] EXPORTED WITHOUT TRACK — WAHOO WILL ROUTE' : '[OK] GPX EXPORTED',
+      'ok'
+    )
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'UNKNOWN ERROR'
     setStatus(`[ERR] ${msg}`, 'error')
@@ -679,10 +739,13 @@ exportBtn.addEventListener('click', () => { void runExport() })
 clearBtn.addEventListener('click', () => {
   if (!confirm('Start a new session? All checkpoints will be cleared.')) return
   clearState()
+  clearMatrixCache()
+  displayCtx = null
   location.reload()
 })
 
 startInput.addEventListener('input', () => {
+  markRouteStale()
   if (startInput.value.trim().length > 0 && startCoords) {
     startCoords = null
     gpsBtn.classList.remove('locked')
@@ -693,14 +756,15 @@ startInput.addEventListener('input', () => {
 })
 
 finishInput.addEventListener('input', () => {
+  markRouteStale()
   if (finishInput.value.trim().length > 0 && finishCoords) {
     finishCoords = null
     scheduleSave()
   }
 })
 
-attachAutocomplete(startInput,  coord => { startCoords  = coord; scheduleSave() })
-attachAutocomplete(finishInput, coord => { finishCoords = coord; scheduleSave() })
+attachAutocomplete(startInput,  coord => { startCoords  = coord; markRouteStale(); scheduleSave() })
+attachAutocomplete(finishInput, coord => { finishCoords = coord; markRouteStale(); scheduleSave() })
 
 // ── Restore or init ───────────────────────────────────────────────
 function applyState(saved: Pick<PersistedState, 'startCoords' | 'startLabel' | 'finishCoords' | 'finishLabel' | 'controls' | 'controlCount' | 'resolvedRoute'>): void {
@@ -729,8 +793,7 @@ function applyState(saved: Pick<PersistedState, 'startCoords' | 'startLabel' | '
     if (!mapInstance) initMap()
     buildRouteList(resolvedRoute)
     renderMap(resolvedRoute)
-    const controlCount_ = resolvedRoute.filter(p => p.role === 'control').length
-    routeMeta.textContent = `${controlCount_} CONTROL${controlCount_ !== 1 ? 'S' : ''}`
+    setRouteMeta(resolvedRoute)
     exportBtn.disabled = false
   }
 }
@@ -790,62 +853,26 @@ shareBtn.addEventListener('click', () => {
   })
 })
 
-// ── Provider unlock UI ────────────────────────────────────────────
+// ── Provider toggle ───────────────────────────────────────────────
 function updateProviderUI(): void {
-  if (isUnlocked()) {
+  if (getProviderName() === 'google') {
     providerIndicator.textContent = '◉ GOOGLE'
-    providerBtn.classList.add('unlocked')
+    providerBtn.classList.add('provider-google')
   } else {
     providerIndicator.textContent = '◎ MAPBOX'
-    providerBtn.classList.remove('unlocked')
+    providerBtn.classList.remove('provider-google')
   }
 }
 
 providerBtn.addEventListener('click', () => {
-  if (isUnlocked()) {
-    lock()
-    updateProviderUI()
-    setStatus('[OK] SWITCHED TO MAPBOX', 'ok')
-  } else {
-    unlockInput.value = ''
-    unlockError.classList.add('hidden')
-    unlockModal.classList.remove('hidden')
-    setTimeout(() => unlockInput.focus(), 50)
+  const next: ProviderName = getProviderName() === 'google' ? 'mapbox' : 'google'
+  try {
+    switchProvider(next)
+    setStatus(`[OK] ${next.toUpperCase()} GEOCODER ACTIVE`, 'ok')
+  } catch {
+    setStatus(`[ERR] ${next.toUpperCase()} GEOCODER NOT CONFIGURED`, 'error')
   }
-})
-
-modalClose.addEventListener('click', () => {
-  unlockModal.classList.add('hidden')
-})
-
-unlockModal.addEventListener('click', e => {
-  if (e.target === unlockModal) unlockModal.classList.add('hidden')
-})
-
-unlockSubmit.addEventListener('click', () => {
-  void (async () => {
-    unlockSubmit.disabled = true
-    unlockSubmit.textContent = 'CHECKING...'
-
-    const ok = await tryUnlock(unlockInput.value)
-
-    unlockSubmit.disabled = false
-    unlockSubmit.textContent = 'UNLOCK'
-
-    if (ok) {
-      unlockModal.classList.add('hidden')
-      updateProviderUI()
-      setStatus('[OK] GOOGLE GEOCODER ACTIVE', 'ok')
-    } else {
-      unlockError.classList.remove('hidden')
-      unlockInput.select()
-    }
-  })()
-})
-
-unlockInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') unlockSubmit.click()
-  if (e.key === 'Escape') unlockModal.classList.add('hidden')
+  updateProviderUI()
 })
 
 updateProviderUI()

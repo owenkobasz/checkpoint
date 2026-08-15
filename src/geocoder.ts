@@ -24,7 +24,11 @@ function makeProvider(name: ProviderName): GeocoderProvider {
 }
 
 function init(): void {
-  const name = (import.meta.env.VITE_GEOCODER_PROVIDER ?? 'mapbox') as ProviderName
+  // Explicit override wins; otherwise Google is the default whenever a key is
+  // configured, falling back to Mapbox for keyless deployments.
+  const configured = import.meta.env.VITE_GEOCODER_PROVIDER as ProviderName | undefined
+  const name: ProviderName =
+    configured ?? (import.meta.env.VITE_GOOGLE_MAPS_KEY ? 'google' : 'mapbox')
   _providerName = name
   _instance = makeProvider(name)
 }
